@@ -3,24 +3,47 @@
 # NOTICE: This file is subject to the license agreement defined in file 'LICENSE', which is part of
 # this source code package.
 
-import time
+import time, random
 
 from src.kesslergame import Scenario, KesslerGame, GraphicsType
-from test_controller import TestController
+from main_controller_akila import AkilaController
 from graphics_both import GraphicsBoth
+
+def generate_asteroids(num_asteroids, position_range_x, position_range_y, speed_range, angle_range, size_range):
+    asteroids = []
+    for _ in range(num_asteroids):
+        position = (random.uniform(*position_range_x), random.uniform(*position_range_y))
+        speed = random.triangular(*speed_range) #random.randint(*speed_range) 
+        angle = random.uniform(*angle_range)
+        size = random.randint(*size_range)
+        asteroids.append({'position': position, 'speed': speed, 'angle': angle, 'size': size})
+    return asteroids
+width, height = (1600, 950)
+
+
+
+
+asteroids_random = generate_asteroids(
+                                num_asteroids=random.randint(30,60),
+                                position_range_x=(0, width),
+                                position_range_y=(0, height),
+                                speed_range=(0,300, 0),
+                                angle_range=(-1, 361),
+                                size_range=(1, 4)
+                            )*random.choice([1])
 
 # Define game scenario
 my_test_scenario = Scenario(name='Test Scenario',
-                            num_asteroids=10,
+                            #num_asteroids=1,
+                            asteroid_states=asteroids_random,
                             ship_states=[
                                 {'position': (400, 400), 'angle': 90, 'lives': 3, 'team': 1, "mines_remaining": 3},
                                 # {'position': (400, 600), 'angle': 90, 'lives': 3, 'team': 2, "mines_remaining": 3},
                             ],
-                            map_size=(1000, 800),
+                            map_size=(width, height),
                             time_limit=60,
                             ammo_limit_multiplier=0,
                             stop_if_no_ammo=False)
-
 # Define Game Settings
 game_settings = {'perf_tracker': True,
                  'graphics_type': GraphicsType.Tkinter,
@@ -33,7 +56,7 @@ game = KesslerGame(settings=game_settings)  # Use this to visualize the game sce
 
 # Evaluate the game
 pre = time.perf_counter()
-score, perf_data = game.run(scenario=my_test_scenario, controllers=[TestController(), TestController()])
+score, perf_data = game.run(scenario=my_test_scenario, controllers=[AkilaController(), AkilaController()])
 
 # Print out some general info about the result
 print('Scenario eval time: '+str(time.perf_counter()-pre))
