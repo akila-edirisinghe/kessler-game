@@ -5,6 +5,8 @@
 
 from src.kesslergame import KesslerController
 from typing import Dict, Tuple
+from fuzzylogic import get_priority
+from impact_time_cal import predict_collision
 import math
 
 
@@ -24,6 +26,16 @@ class AkilaController(KesslerController):
         #consider where the asteroid will be in like 2 or 3 seconds in the future and turn towards it(consideration)
         #priority system /use fuzzy logic for this part
         #for invulnerability, check if you are going to hit or not. if no collision, start firing
+        
+        
+        # rounding stuff and then creating a lookup table. //json or pickle to store the data.
+        # u can check the future asteroid position for if it is going off screen and if the bullet won'T make it in time.
+        # including mines in the future prediction( u are already doing the calculations for it) kamikaze mines
+        #edge case = asteroids not moving -- ex_adv_four_corners_pt1
+        #consider wrapping asteroids and collision *consider the impact time so that priority will be inflated
+        #change priority for fuzzy logic to allow to shoot more asteroids within the same heading
+        
+        
         """
         Method processed each time step by this controller to determine what control actions to take
 
@@ -37,13 +49,14 @@ class AkilaController(KesslerController):
             bool: fire control value. Shoots if true
             bool: mine deployment control value. Lays mine if true
         """
-
+        #pixels per frame
+        bsf  = 800/30
+        heading = ship_state['heading']
         fire = False
-        closest_ast = None
-        a_dist = math.inf
+        best_ast = None
+        highest_prio = -1*math.inf
         asteroids_already_shot = False
         
-
         #picking the closest asteroid
         for asteroid in game_state['asteroids']:
             asteroids_already_shot = False
@@ -54,19 +67,48 @@ class AkilaController(KesslerController):
             if asteroids_already_shot == True:
                 continue
             
-            distance = math.sqrt((asteroid['position'][0] - ship_state['position'][0])**2 + (asteroid['position'][1] - ship_state['position'][1])**2)
+            asteroid_size = asteroid['size']
+            impact_time_interval= predict_collision(ship_state['position'], (0,0), 20, asteroid['position'], asteroid['velocity'], asteroid['radius'])
+            turn_time = 0
+            impact_time = 0
+            #nan not impact
+            #inf in impact
+            #- means /// - + in collision   -- past coliision ++ future collision**
             
-            if closest_ast is None or distance < a_dist:
+            if math.isinf(impact_time_interval[0]):
+                impact_time = 0
+            elif math.isnan(impact_time_interval[0]):
+                impact_time = math.inf
+            else:
+                if impact_time_interval[0] < 0 and impact_time_interval[1] > 0:
+                    impact_time = 0
+                elif impact_time_interval[0] < 0 and impact_time_interval[1] < 0:
+                    impact_time = math.inf
+                elif impact_time_interval[0] > 0 and impact_time_interval[1] > 0:
+                    impact_time = impact_time_interval[0]
+                else:
+                    raise ValueError("impact time is not being calculated correctly")
+                        
+            
+            distance = math.sqrt((asteroid['position'][0] - ship_state['position'][0])**2 + (asteroid['position'][1] - ship_state['position'][1])**2)   
+            time_bullet = distance/bsf + 1 #frames
+            future_ast_x = asteroid["position"][0] + time_bullet*(asteroid["velocity"][0]/30)
+            future_ast_y = asteroid["position"][1] + time_bullet*(asteroid["velocity"][1]/30)
+            desired_angle = math.degrees(math.atan2(future_ast_y - ship_state['position'][1], future_ast_x - ship_state['position'][0]))
+           
+            turn_time = min(abs(desired_angle - heading),360-abs(desired_angle - heading))/6
+            priority = get_priority(asteroid_size,impact_time, turn_time)
+            
+            if best_ast is None or priority > highest_prio:
                 #if asteroids_already_shot == False:
-                closest_ast = asteroid
-                a_dist = distance
+                best_ast = asteroid
+                highest_prio = priority
             #asteroids_already_shot = False
-        if closest_ast is None:
+        if best_ast is None:
             print("ALL DONE")
             if self.delay == 1:
                 fire = True
                 self.delay = 0
-                
                 
             else:
                 fire = False
@@ -74,16 +116,17 @@ class AkilaController(KesslerController):
             return 0, 0, fire, False
         
 
+        a_distance = math.sqrt((best_ast['position'][0] - ship_state['position'][0])**2 + (best_ast['position'][1] - ship_state['position'][1])**2)
+
         
         #predicting the position of the asteroid in the future
-        bsf  = 800/30 #pixels per frame
-        time_bullet = a_dist/bsf + 1 #frames
+         
+        time_bullet = a_distance/bsf + 1 #frames
         #time_bullet  = 0
-        future_ast_x = closest_ast["position"][0] + time_bullet*(closest_ast["velocity"][0]/30)
-        future_ast_y = closest_ast["position"][1] + time_bullet*(closest_ast["velocity"][1]/30)
+        future_ast_x = best_ast["position"][0] + time_bullet*(best_ast["velocity"][0]/30)
+        future_ast_y = best_ast["position"][1] + time_bullet*(best_ast["velocity"][1]/30)
         
-        #finding the desired angle to shoot for the closest asteroid
-        desired_angle = math.degrees(math.atan2(future_ast_y - ship_state['position'][1], future_ast_x - ship_state['position'][0]))
+       
         
         #delaying so that you wait for the ship to finish turning before firing
         if self.delay == 1:
@@ -92,51 +135,48 @@ class AkilaController(KesslerController):
             fire = True
             self.delay = 0
               
+         #finding the desired angle to shoot for the closest asteroid
+        desired_angle = math.degrees(math.atan2(future_ast_y - ship_state['position'][1], future_ast_x - ship_state['position'][0]))
+   
         #converting the angle to the range 0-360      
         if desired_angle < 0 :
             desired_angle  = 360 + desired_angle
+     
         
         
-        heading = ship_state['heading']
-        
-        #turning towards the desired angle // finding which direction to turn
-        if heading < desired_angle and desired_angle - heading < 180:
-            if abs(desired_angle - heading) > 6:
-                turn_rate = 180
-              
+        turn_direction = 0
+        if heading < desired_angle :
+            if desired_angle - heading < 180:
+                turn_direction = 1
             else:
-                turn_rate = 30* abs(desired_angle-heading)  
-                if game_state["sim_frame"] - self.rest_counter >=2:
-                    self.delay = 1  
-                    if closest_ast is not None:
-                        closest_ast["sim_frame"] = game_state["sim_frame"] + time_bullet
-                        
-                        self.asteroids_shot.append(closest_ast)
-                
+                turn_direction = -1
         else:
-            if abs(desired_angle - heading) > 6:
-                turn_rate = -180
+            if heading - desired_angle < 180:
+                turn_direction = -1
             else:
-                turn_rate = -1*(30* abs(desired_angle-heading))    
-                if game_state["sim_frame"] - self.rest_counter >=2:
-                    self.delay = 1  
-                    if closest_ast is not None:
-                        closest_ast["sim_frame"] = game_state["sim_frame"] + time_bullet
-                        
-                        self.asteroids_shot.append(closest_ast)
+                turn_direction = 1
                 
+        #turning towards the desired angle // finding which direction to turn
         
+        if abs(desired_angle - heading) > 6:
+            turn_rate = turn_direction*180 
+        else:
+            turn_rate = turn_direction* 30* abs(desired_angle-heading)  
+            if game_state["sim_frame"] - self.rest_counter >=2:
+                print()
+                print("\nturn rate", turn_rate, "\nheading", heading, "\ndesired angle", desired_angle)
+                self.delay = 1  
+                if best_ast is not None:
+                    best_ast["sim_frame"] = game_state["sim_frame"] + time_bullet
+                    
+                    self.asteroids_shot.append(best_ast)
+ 
         thrust = 0
-        
         self.asteroids_shot = [ast for ast in self.asteroids_shot if ast["sim_frame"] > game_state["sim_frame"]]
                 
         drop_mine = False
         if ship_state["is_respawning"] :
             fire = False
-        print()
-        print("\ndelay=", self.delay , "\nrest_counter=", self.rest_counter, "\nsim_frame =", game_state["sim_frame"], "\nfire", fire, 
-              "\nclosest_ast =  ", closest_ast, "\nasteroids_shot = ", self.asteroids_shot)
-        
         
         return thrust, turn_rate, fire, drop_mine
 

@@ -8,6 +8,8 @@ import time, random
 from src.kesslergame import Scenario, KesslerGame, GraphicsType
 from main_controller_akila import AkilaController
 from graphics_both import GraphicsBoth
+from xfc_2023_replica_scenarios import *
+from test_controller import TestController
 
 def generate_asteroids(num_asteroids, position_range_x, position_range_y, speed_range, angle_range, size_range):
     asteroids = []
@@ -20,11 +22,16 @@ def generate_asteroids(num_asteroids, position_range_x, position_range_y, speed_
     return asteroids
 width, height = (1600, 950)
 
+'''
+randseed = random.randint(1, 100000000)
+random.seed(48925489)
+print("Random seed: ", randseed)
+'''
 
 
 
 asteroids_random = generate_asteroids(
-                                num_asteroids=random.randint(2,4),
+                                num_asteroids=random.randint(20,20),
                                 position_range_x=(0, width),
                                 position_range_y=(0, height),
                                 speed_range=(0,300, 0),
@@ -47,7 +54,7 @@ my_test_scenario = Scenario(name='Test Scenario',
 # Define Game Settings
 game_settings = {'perf_tracker': True,
                  'graphics_type': GraphicsType.Tkinter,
-                 'realtime_multiplier': 1,
+                 'realtime_multiplier': 0,
                  'graphics_obj': None,
                  'frequency': 30}
 
@@ -56,7 +63,7 @@ game = KesslerGame(settings=game_settings)  # Use this to visualize the game sce
 
 # Evaluate the game
 pre = time.perf_counter()
-score, perf_data = game.run(scenario=my_test_scenario, controllers=[AkilaController(), AkilaController()])
+score, perf_data = game.run(scenario=adv_multi_ring_closing_left, controllers=[AkilaController(), TestController()])
 
 # Print out some general info about the result
 print('Scenario eval time: '+str(time.perf_counter()-pre))
