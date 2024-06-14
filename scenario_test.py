@@ -9,6 +9,17 @@ from main_controller_akila import AkilaController
 from graphics_both import GraphicsBoth
 from xfc_2023_replica_scenarios import *
 from test_controller import TestController
+import sys 
+
+xfc2023 = [ex_adv_four_corners_pt1, ex_adv_four_corners_pt2, ex_adv_asteroids_down_up_pt1, ex_adv_asteroids_down_up_pt2,
+           ex_adv_direct_facing, ex_adv_two_asteroids_pt1, ex_adv_two_asteroids_pt2, adv_random_big_1, adv_random_big_2, 
+           adv_random_big_3, adv_random_big_4, adv_multi_wall_bottom_hard_1, adv_multi_wall_right_hard_1, adv_multi_ring_closing_left,
+           adv_multi_ring_closing_right, adv_multi_two_rings_closing, avg_multi_ring_closing_both2, adv_multi_ring_closing_both_inside, 
+           adv_multi_ring_closing_both_inside_fast
+           
+           ]
+
+
 
 def generate_asteroids(num_asteroids, position_range_x, position_range_y, speed_range, angle_range, size_range):
     asteroids = []
@@ -62,7 +73,7 @@ game = KesslerGame(settings=game_settings)  # Use this to visualize the game sce
 
 # Evaluate the game
 pre = time.perf_counter()
-score, perf_data = game.run(scenario=my_test_scenario, controllers=[AkilaController(), TestController()])
+score, perf_data = game.run(scenario=xfc2023[int(sys.argv[1])], controllers=[AkilaController(), TestController()])
 
 # Print out some general info about the result
 print('Scenario eval time: '+str(time.perf_counter()-pre))

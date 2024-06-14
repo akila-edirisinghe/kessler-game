@@ -18,11 +18,9 @@ class AkilaController(KesslerController):
         self.delay = 0
         self.asteroids_shot = []
         self.rest_counter = 0
-        
         self.lookup_table = {}
+        self.prev_best_ast = None
         
-       
-       
         '''
         priority_lookup = {}
         for size in range(1,5):
@@ -39,15 +37,12 @@ class AkilaController(KesslerController):
         ...
         #add a frame counter to keep track of the time
     def get_fuzzy_values(self, size, impact_time, turn_time):
-        
          
         if impact_time > 300:
             
             #print("\n","size", size, "impact time", impact_time, "turn time", turn_time,"\n")
             impact_time = 300
-            
-        
-                
+                     
         #print("\n","size", size, "impact time", impact_time, "turn time", turn_time,"\n")
         key = f"{size},{impact_time},{turn_time}"
         return self.lookup_table[key]
@@ -65,7 +60,6 @@ class AkilaController(KesslerController):
         #consider wrapping asteroids and collision *consider the impact time so that priority will be inflated TODO ***
         #change priority for fuzzy logic to allow to shoot more asteroids within the same heading TODO *DONE
         #make it shoot no matter what and not wait until it reaches the asteroid it needs to shoot. TODO DONE
-        
         
         """
         Method processed each time step by this controller to determine what control actions to take
@@ -89,7 +83,9 @@ class AkilaController(KesslerController):
         best_ast = None
         highest_prio = -1*math.inf
         asteroids_already_shot = False
-
+        
+        found_prev_best_ast = False
+        #print("asteroids in the game", len(game_state['asteroids']))
         #picking the closest asteroid
         for asteroid in game_state['asteroids']:
             asteroids_already_shot = False
@@ -114,15 +110,17 @@ class AkilaController(KesslerController):
             elif math.isnan(impact_time_interval[0]):
                 impact_time = 300 #changed from math.inf to 300 because of lookup table keys
             else:
-                if impact_time_interval[0] < 0 and impact_time_interval[1] > 0:
+                if impact_time_interval[0] <= 0 and impact_time_interval[1] >= 0:
                     impact_time = 0
-                elif impact_time_interval[0] < 0 and impact_time_interval[1] < 0:
+                elif impact_time_interval[0] <= 0 and impact_time_interval[1] <= 0:
                     impact_time = 300  #changed from math.inf to 300
-                elif impact_time_interval[0] > 0 and impact_time_interval[1] > 0:
+                elif impact_time_interval[0] >= 0 and impact_time_interval[1] >= 0:
                     impact_time = impact_time_interval[0]*30
                     #impact is getting rounded later
                 else:
+                    #print("impact_time_interval", impact_time_interval)
                     raise ValueError("impact time is not being calculated correctly")
+                    
                         
          
             distance = math.sqrt((asteroid['position'][0] - ship_state['position'][0])**2 + (asteroid['position'][1] - ship_state['position'][1])**2)   
@@ -147,22 +145,22 @@ class AkilaController(KesslerController):
             
             priority = self.get_fuzzy_values(asteroid_size,round(impact_time), turn_time)
             #rounding priority
-            #priority = round(priority)
+            priority = round(priority)
            
             
             #asteroid_priority_list.append({"priority": priority, "asteroid": asteroid})
-            '''
-            prev_asteroids_pos = []
+            
+            prev_asteroids_pos = []#x,y
             if self.prev_best_ast is not None:
                 prev_asteroids_pos.append(self.prev_best_ast["position"][0] +self.prev_best_ast["velocity"][0]/30)
                 prev_asteroids_pos.append(self.prev_best_ast["position"][1] +self.prev_best_ast["velocity"][1]/30)
-                if prev_asteroids_pos[0] == asteroid["position"][0] and prev_asteroids_pos[1] == asteroid["position"][1] and self.prev_best_ast["size"] == asteroid["size"] :
+                if math.isclose(prev_asteroids_pos[0],asteroid["position"][0]) and math.isclose(prev_asteroids_pos[1],asteroid["position"][1]) and self.prev_best_ast["size"] == asteroid["size"] :
                     prev_prio = self.prev_best_ast["priority"]
-                    self.prev_best_ast = asteroid
+                    self.prev_best_ast = dict(asteroid)
                     self.prev_best_ast["priority"] = prev_prio
-                else:
-                    self.prev_best_ast = None
-                    '''
+                    found_prev_best_ast = True
+                
+                    
             
             #mine logic // issue when live is 1 and mine is 1, need to drop mine earlier to save life
             if impact_time_interval[0] > 0 and impact_time_interval[1] > 0 and ship_state["mines_remaining"] > 0 and impact_time !=0 and ship_state["is_respawning"] == False:
@@ -178,22 +176,20 @@ class AkilaController(KesslerController):
                         drop_mine = True
                        
                                     
-            if best_ast is None or priority >= highest_prio:
+            if best_ast is None or priority > highest_prio:
                 #if asteroids_already_shot == False:
-                best_ast = asteroid
+                best_ast = dict(asteroid)
                 highest_prio = priority
             #asteroids_already_shot = False
+            #print("best_ast", best_ast)
+            
         
-        print("\nbest asteroid", best_ast, "\n")
-            
-            
         
         if best_ast is None:
-            print("ALL DONE")
+            
             if self.delay == 1:
                 fire = True
-                self.delay = 0
-                
+                self.delay = 0  
             else:
                 fire = False
             self.asteroids_shot = [ast for ast in self.asteroids_shot if ast["sim_frame"] > game_state["sim_frame"]]
@@ -201,19 +197,17 @@ class AkilaController(KesslerController):
         
         
        
-        '''
+         #meaning it is the first
         best_ast["priority"] = highest_prio
-
-        if self.prev_best_ast is  None: #meaning it is the first
-            self.prev_best_ast = best_ast
-            
+        if found_prev_best_ast == False:
+            self.prev_best_ast = best_ast 
         else:
-            if abs(self.prev_best_ast["priority"] - best_ast["priority"]) <= 5:
+            if abs(self.prev_best_ast["priority"] - best_ast["priority"]) <=1:
                 best_ast = self.prev_best_ast
             else:
                 self.prev_best_ast = best_ast
         
-       ''' 
+       
 
         a_distance = math.sqrt((best_ast['position'][0] - ship_state['position'][0])**2 + (best_ast['position'][1] - ship_state['position'][1])**2)
 
@@ -291,7 +285,7 @@ class AkilaController(KesslerController):
         Returns:
             str: name of this controller
         """
-        return "akila Controller"
+        return "hitormiss v0.0"
     
     
     

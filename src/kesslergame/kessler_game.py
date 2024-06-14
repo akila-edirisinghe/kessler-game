@@ -152,7 +152,7 @@ class KesslerGame:
                     controller_time = time.perf_counter() - t_start if ship.alive else 0.00
                     perf_dict['controller_times'].append(controller_time)
                     t_start = time.perf_counter()
-
+            
             if self.perf_tracker:
                 perf_dict['total_controller_time'] = time.perf_counter() - step_start
                 prev = time.perf_counter()
