@@ -19,12 +19,7 @@ class AkilaController(KesslerController):
         self.asteroids_shot = []
         self.rest_counter = 0
        
-        
-        
-        
-       
-        
-        
+    
         '''
         priority_lookup = {}
         for size in range(1,5):
@@ -35,13 +30,17 @@ class AkilaController(KesslerController):
         with open('priorty_lookup_table.json', 'w') as json_file:
             json.dump(priority_lookup, json_file)
             
-       ''' 
+        '''
         
         ...
         #add a frame counter to keep track of the time
     def get_fuzzy_values(self, size, impact_time, turn_time):
         with open('priorty_lookup_table.json', 'r') as json_file:
             lookup_table = json.load(json_file)
+            if impact_time > 300:
+                
+                print("\n","size", size, "impact time", impact_time, "turn time", turn_time,"\n")
+                impact_time = 300
         key = str(size+impact_time+turn_time)
         return lookup_table[key]
 
@@ -53,11 +52,11 @@ class AkilaController(KesslerController):
    
         # rounding stuff and then creating a lookup table. //json or pickle to store the data. TODO DONE
         # u can check the future asteroid position for if it is going off screen and if the bullet won'T make it in time.
-        # including mines in the future prediction( u are already doing the calculations for it) kamikaze mines TODO ***    
-        #edge case = asteroids not moving -- ex_adv_four_corners_pt1 TODO ***
+        # including mines in the future prediction( u are already doing the calculations for it) kamikaze mines TODO ***  DONE 
+        #edge case = asteroids not moving -- ex_adv_four_corners_pt1 TODO *** DONE
         #consider wrapping asteroids and collision *consider the impact time so that priority will be inflated TODO ***
-        #change priority for fuzzy logic to allow to shoot more asteroids within the same heading TODO *
-        #make it shoot no matter what and not wait until it reaches the asteroid it needs to shoot. TODO 
+        #change priority for fuzzy logic to allow to shoot more asteroids within the same heading TODO *DONE
+        #make it shoot no matter what and not wait until it reaches the asteroid it needs to shoot. TODO DONE
         
         
         """
@@ -77,6 +76,7 @@ class AkilaController(KesslerController):
         bsf  = 800/30
         heading = ship_state['heading']
         fire = False
+        drop_mine = False
         
         best_ast = None
         highest_prio = -1*math.inf
@@ -111,12 +111,12 @@ class AkilaController(KesslerController):
                 elif impact_time_interval[0] < 0 and impact_time_interval[1] < 0:
                     impact_time = 300  #changed from math.inf to 300
                 elif impact_time_interval[0] > 0 and impact_time_interval[1] > 0:
-                    impact_time = round(impact_time_interval[0])
-                    #round down probably
+                    impact_time = impact_time_interval[0]
+                    #impact is getting rounded later
                 else:
                     raise ValueError("impact time is not being calculated correctly")
                         
-            
+         
             distance = math.sqrt((asteroid['position'][0] - ship_state['position'][0])**2 + (asteroid['position'][1] - ship_state['position'][1])**2)   
             time_bullet = distance/bsf + 1 #frames
             future_ast_x = asteroid["position"][0] + time_bullet*(asteroid["velocity"][0]/30)
@@ -127,12 +127,20 @@ class AkilaController(KesslerController):
             #round down probably
             turn_time = round(turn_time)
             
+            '''
+            u can do a check here so that if the impact_time is eveer more than 300, we make it 300
+            
+            '''
+            
+            
            #if isinstance(impact_time, int):
             
             #priority = get_priority(asteroid_size,impact_time, turn_time)
             
-            priority = self.get_fuzzy_values(asteroid_size,impact_time, turn_time)
-            print("size", asteroid_size , "impact time", impact_time, "turn time", turn_time, "prioriy", priority, "asteroid", asteroid)
+            priority = self.get_fuzzy_values(asteroid_size,round(impact_time), turn_time)
+            #rounding priority
+            priority = round(priority)
+           
             
             #asteroid_priority_list.append({"priority": priority, "asteroid": asteroid})
             '''
@@ -147,6 +155,22 @@ class AkilaController(KesslerController):
                 else:
                     self.prev_best_ast = None
                     '''
+            
+            #mine logic // issue when live is 1 and mine is 1, need to drop mine earlier to save life
+            if impact_time_interval[0] > 0 and impact_time_interval[1] > 0 and ship_state["mines_remaining"] > 0 and impact_time != 0:
+                '''
+                #mine do damage to the ship as well hence no point in dropping mine
+                if ship_state["lives_remaining"] == 1 and ship_state["mines_remaining"] >0:
+                    if impact_time_interval[0]*30 <= 90:
+                        drop_mine = True
+                '''
+                if impact_time_interval[0]*30 <= 30 :
+                    if (asteroid["velocity"] not in self.asteroids_shot and asteroid["size"] >1) or ship_state["lives_remaining"] > 1:
+                        drop_mine = True
+                        print("\ndropping mine\n", " asteroid ", asteroid, "impact time", impact_time_interval)
+                        
+                        
+            
             
                 
             if best_ast is None or priority >= highest_prio:
@@ -232,13 +256,13 @@ class AkilaController(KesslerController):
         if abs(desired_angle - heading) > 6:
             turn_rate = turn_direction*180 
             
-            print("\nturn rate123", turn_rate, "\nheading", heading, "\ndesired angle", desired_angle)
+           
         #telling it to turn slowly or stop turning
         else:
             turn_rate = turn_direction* 30* abs(desired_angle-heading)  
             if game_state["sim_frame"] - self.rest_counter >=2:
-                print()
-                print("\nturn rate", turn_rate, "\nheading", heading, "\ndesired angle", desired_angle)
+                
+            
                 self.delay = 1  
                 if best_ast is not None:
                     best_ast["sim_frame"] = game_state["sim_frame"] + time_bullet
@@ -248,7 +272,7 @@ class AkilaController(KesslerController):
         thrust = 0
         self.asteroids_shot = [ast for ast in self.asteroids_shot if ast["sim_frame"] > game_state["sim_frame"]]
                 
-        drop_mine = False
+        
         if ship_state["is_respawning"] :
             fire = False
         
