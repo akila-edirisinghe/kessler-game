@@ -18,31 +18,39 @@ class AkilaController(KesslerController):
         self.delay = 0
         self.asteroids_shot = []
         self.rest_counter = 0
+        
+        self.lookup_table = {}
+        
        
-    
+       
         '''
         priority_lookup = {}
         for size in range(1,5):
             for impact_time in range(301):
                 for turn_time in range(31):
-                    priority_lookup[size+impact_time+turn_time] = get_priority(size,impact_time, turn_time)
+                    
+                    priority_lookup[f"{size},{impact_time},{turn_time}"] = get_priority(size,impact_time, turn_time)
                     
         with open('priorty_lookup_table.json', 'w') as json_file:
             json.dump(priority_lookup, json_file)
-            
-        '''
-        
+            '''
+        with open('priorty_lookup_table.json', 'r') as json_file:
+            self.lookup_table = json.load(json_file)
         ...
         #add a frame counter to keep track of the time
     def get_fuzzy_values(self, size, impact_time, turn_time):
-        with open('priorty_lookup_table.json', 'r') as json_file:
-            lookup_table = json.load(json_file)
-            if impact_time > 300:
+        
+         
+        if impact_time > 300:
+            
+            #print("\n","size", size, "impact time", impact_time, "turn time", turn_time,"\n")
+            impact_time = 300
+            
+        
                 
-                print("\n","size", size, "impact time", impact_time, "turn time", turn_time,"\n")
-                impact_time = 300
-        key = str(size+impact_time+turn_time)
-        return lookup_table[key]
+        #print("\n","size", size, "impact time", impact_time, "turn time", turn_time,"\n")
+        key = f"{size},{impact_time},{turn_time}"
+        return self.lookup_table[key]
 
     def actions(self, ship_state: Dict, game_state: Dict) -> Tuple[float, float, bool, bool]:
         #consider where the asteroid will be in like 2 or 3 seconds in the future and turn towards it(consideration)
@@ -111,7 +119,7 @@ class AkilaController(KesslerController):
                 elif impact_time_interval[0] < 0 and impact_time_interval[1] < 0:
                     impact_time = 300  #changed from math.inf to 300
                 elif impact_time_interval[0] > 0 and impact_time_interval[1] > 0:
-                    impact_time = impact_time_interval[0]
+                    impact_time = impact_time_interval[0]*30
                     #impact is getting rounded later
                 else:
                     raise ValueError("impact time is not being calculated correctly")
@@ -131,7 +139,7 @@ class AkilaController(KesslerController):
             u can do a check here so that if the impact_time is eveer more than 300, we make it 300
             
             '''
-            
+            #print("\nimpact_time_interval", impact_time_interval)
             
            #if isinstance(impact_time, int):
             
@@ -139,7 +147,7 @@ class AkilaController(KesslerController):
             
             priority = self.get_fuzzy_values(asteroid_size,round(impact_time), turn_time)
             #rounding priority
-            priority = round(priority)
+            #priority = round(priority)
            
             
             #asteroid_priority_list.append({"priority": priority, "asteroid": asteroid})
@@ -157,22 +165,19 @@ class AkilaController(KesslerController):
                     '''
             
             #mine logic // issue when live is 1 and mine is 1, need to drop mine earlier to save life
-            if impact_time_interval[0] > 0 and impact_time_interval[1] > 0 and ship_state["mines_remaining"] > 0 and impact_time != 0:
+            if impact_time_interval[0] > 0 and impact_time_interval[1] > 0 and ship_state["mines_remaining"] > 0 and impact_time !=0 and ship_state["is_respawning"] == False:
+                
                 '''
                 #mine do damage to the ship as well hence no point in dropping mine
                 if ship_state["lives_remaining"] == 1 and ship_state["mines_remaining"] >0:
                     if impact_time_interval[0]*30 <= 90:
                         drop_mine = True
                 '''
-                if impact_time_interval[0]*30 <= 30 :
-                    if (asteroid["velocity"] not in self.asteroids_shot and asteroid["size"] >1) or ship_state["lives_remaining"] > 1:
+                if impact_time_interval[0]*30 <= 7 :
+                    if (asteroid["velocity"] not in self.asteroids_shot ) :#or ship_state["lives_remaining"] > 1
                         drop_mine = True
-                        print("\ndropping mine\n", " asteroid ", asteroid, "impact time", impact_time_interval)
-                        
-                        
-            
-            
-                
+                       
+                                    
             if best_ast is None or priority >= highest_prio:
                 #if asteroids_already_shot == False:
                 best_ast = asteroid

@@ -28,9 +28,9 @@ impact_time['later'] = fuzz.trimf(impact_time_range,    [75, 150, 200])#200>225
 impact_time['distant'] = fuzz.trimf(impact_time_range,  [75, 300, 300])
 
 
-turn_time['short'] = fuzz.trimf(turn_time_range,    [0, 0, 5])#5>7.5
-turn_time['moderate'] = fuzz.trimf(turn_time_range, [0, 5, 15])#15>20
-turn_time['long'] = fuzz.trimf(turn_time_range,     [5, 15, 30])
+turn_time['short'] = fuzz.trimf(turn_time_range,    [0, 0, 4])#5>7.5>3  maybe 4 as well. 
+turn_time['moderate'] = fuzz.trimf(turn_time_range, [0, 4, 15])#15>20
+turn_time['long'] = fuzz.trimf(turn_time_range,     [4, 15, 30])
 turn_time['very_long'] = fuzz.trimf(turn_time_range,[15, 30, 30])
 
 priority['very_low'] = fuzz.trimf(priority_range, [1, 1, 3])
@@ -62,21 +62,21 @@ rule16 = ctrl.Rule(size['small'] & impact_time['distant'] & turn_time['very_long
 
 rule17 = ctrl.Rule(impact_time['imminent'] & turn_time['short'], priority['very_high'])
 rule18 = ctrl.Rule(impact_time['imminent'] & turn_time['moderate'], priority['very_high'])
-rule19 = ctrl.Rule(impact_time['imminent'] & turn_time['long'], priority['high'])
-rule20 = ctrl.Rule(impact_time['imminent'] & turn_time['very_long'], priority['high'])
+rule19 = ctrl.Rule(impact_time['imminent'] & turn_time['long'], priority['very_high'])#h>vh*
+rule20 = ctrl.Rule(impact_time['imminent'] & turn_time['very_long'], priority['very_high'])#h>vh*
 
 rule21 = ctrl.Rule(impact_time['soon'] & turn_time['short'], priority['very_high'])
 rule22 = ctrl.Rule(impact_time['soon'] & turn_time['moderate'], priority['very_high'])
 rule23 = ctrl.Rule(impact_time['soon'] & turn_time['long'], priority['very_high'])
 rule24 = ctrl.Rule(impact_time['soon'] & turn_time['very_long'], priority['very_high'])
 
-rule25 = ctrl.Rule(impact_time['later'] & turn_time['short'], priority['very_high'])#h > vh
-rule26 = ctrl.Rule(impact_time['later'] & turn_time['moderate'], priority['medium'])
-rule27 = ctrl.Rule(impact_time['later'] & turn_time['long'], priority['low'])
+rule25 = ctrl.Rule(impact_time['later'] & turn_time['short'], priority['high'])#h > vh* > h
+rule26 = ctrl.Rule(impact_time['later'] & turn_time['moderate'], priority['high'])#m>h*
+rule27 = ctrl.Rule(impact_time['later'] & turn_time['long'], priority['very_low'])#l>vl*
 rule28 = ctrl.Rule(impact_time['later'] & turn_time['very_long'], priority['very_low'])
 
-rule29 = ctrl.Rule(impact_time['distant'] & turn_time['short'], priority['very_high']) #h > vh
-rule30 = ctrl.Rule(impact_time['distant'] & turn_time['moderate'], priority['very_high'])#vl > vh
+rule29 = ctrl.Rule(impact_time['distant'] & turn_time['short'], priority['high']) #vh>h
+rule30 = ctrl.Rule(impact_time['distant'] & turn_time['moderate'], priority['high'])#vh>h
 rule31 = ctrl.Rule(impact_time['distant'] & turn_time['long'], priority['very_low'])
 rule32 = ctrl.Rule(impact_time['distant'] & turn_time['very_long'], priority['very_low'])
 

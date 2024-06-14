@@ -30,7 +30,7 @@ print("Random seed: ", randseed)
 
 
 asteroids_random = generate_asteroids(
-                                num_asteroids=random.randint(20,30),
+                                num_asteroids=random.randint(50,70),
                                 position_range_x=(0, width),
                                 position_range_y=(0, height),
                                 speed_range=(0,300, 0),
