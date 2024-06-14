@@ -1,7 +1,7 @@
 import numpy as np
 import skfuzzy as fuzz
 from skfuzzy import control as ctrl
-import os, time
+import os, time, math
 
 # Define the ranges of our variables
 size_range = np.arange(1, 5, 1)
@@ -22,14 +22,14 @@ size['medium'] = fuzz.trimf(size_range, [1, 2, 3])
 size['large'] = fuzz.trimf(size_range, [2, 3, 4])
 size['huge'] = fuzz.trimf(size_range, [3, 4, 4])
 
-impact_time['imminent'] = fuzz.trimf(impact_time_range, [0, 0, 75])
-impact_time['soon'] = fuzz.trimf(impact_time_range,     [0, 75, 150])
-impact_time['later'] = fuzz.trimf(impact_time_range,    [75, 150, 200])
+impact_time['imminent'] = fuzz.trimf(impact_time_range, [0, 0, 75])#75>100
+impact_time['soon'] = fuzz.trimf(impact_time_range,     [0, 75, 150])#150>175
+impact_time['later'] = fuzz.trimf(impact_time_range,    [75, 150, 200])#200>225
 impact_time['distant'] = fuzz.trimf(impact_time_range,  [75, 300, 300])
 
 
-turn_time['short'] = fuzz.trimf(turn_time_range,    [0, 0, 5])
-turn_time['moderate'] = fuzz.trimf(turn_time_range, [0, 5, 15])
+turn_time['short'] = fuzz.trimf(turn_time_range,    [0, 0, 5])#5>7.5
+turn_time['moderate'] = fuzz.trimf(turn_time_range, [0, 5, 15])#15>20
 turn_time['long'] = fuzz.trimf(turn_time_range,     [5, 15, 30])
 turn_time['very_long'] = fuzz.trimf(turn_time_range,[15, 30, 30])
 
@@ -70,15 +70,16 @@ rule22 = ctrl.Rule(impact_time['soon'] & turn_time['moderate'], priority['very_h
 rule23 = ctrl.Rule(impact_time['soon'] & turn_time['long'], priority['very_high'])
 rule24 = ctrl.Rule(impact_time['soon'] & turn_time['very_long'], priority['very_high'])
 
-rule25 = ctrl.Rule(impact_time['later'] & turn_time['short'], priority['high'])
+rule25 = ctrl.Rule(impact_time['later'] & turn_time['short'], priority['very_high'])#h > vh
 rule26 = ctrl.Rule(impact_time['later'] & turn_time['moderate'], priority['medium'])
 rule27 = ctrl.Rule(impact_time['later'] & turn_time['long'], priority['low'])
 rule28 = ctrl.Rule(impact_time['later'] & turn_time['very_long'], priority['very_low'])
 
-rule29 = ctrl.Rule(impact_time['distant'] & turn_time['short'], priority['high']) #could be higher as well
-rule30 = ctrl.Rule(impact_time['distant'] & turn_time['moderate'], priority['very_low'])
+rule29 = ctrl.Rule(impact_time['distant'] & turn_time['short'], priority['very_high']) #h > vh
+rule30 = ctrl.Rule(impact_time['distant'] & turn_time['moderate'], priority['very_high'])#vl > vh
 rule31 = ctrl.Rule(impact_time['distant'] & turn_time['long'], priority['very_low'])
 rule32 = ctrl.Rule(impact_time['distant'] & turn_time['very_long'], priority['very_low'])
+
 
 
 
@@ -98,6 +99,6 @@ def get_priority(size_val, impact_time_val, turn_time_val):
 
 
 # Test the system with some example inputs
-print(get_priority(4, 10, 10))  # Example input: huge size, imminent impact, short turn time
-print(get_priority(3, 25, 30))  # Example input: large size, soon impact, moderate turn time
-print(get_priority(1, -100000, 25))
+#print(get_priority(4, 10, 10))  # Example input: huge size, imminent impact, short turn time
+#print(get_priority(3, 25, 30))  # Example input: large size, soon impact, moderate turn time
+print(get_priority(1, math.inf, 25))

@@ -9,15 +9,16 @@ height = 800
 ex_adv_four_corners_pt1 = Scenario(
     name='ex_adv_four_corners_pt1',
     asteroid_states=[
-        {'position': (pad, pad), 'angle': 0.0, 'speed': 0, 'size': 1},
+        {'position': (pad, pad), 'angle': 0.0, 'speed': 0, 'size': 4},
         {'position': (width - pad, pad), 'angle': 0.0, 'speed': 0, 'size': 4},
         {'position': (pad, height - pad), 'angle': 0.0, 'speed': 0, 'size': 2},
         {'position': (width - pad, height - pad), 'angle': 0.0, 'speed': 0, 'size': 3},
     ],
     ship_states=[{'position': (width//2, height//2), 'lives': 3, 'angle': 0, 'team': 1, 'mines_remaining': 3},
-                 {'position': (width*7/10, height//2), 'lives': 3, 'angle': 0, 'team': 2, 'mines_remaining': 3}],
+                 #{'position': (width*7/10, height//2), 'lives': 3, 'angle': 0, 'team': 2, 'mines_remaining': 3}],
+    ],
     map_size=(width, height),
-    time_limit=20,
+    time_limit=60,
 )
 
 ex_adv_four_corners_pt2 = Scenario(

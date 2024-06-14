@@ -4,7 +4,6 @@
 # this source code package.
 
 import time, random
-
 from src.kesslergame import Scenario, KesslerGame, GraphicsType
 from main_controller_akila import AkilaController
 from graphics_both import GraphicsBoth
@@ -31,7 +30,7 @@ print("Random seed: ", randseed)
 
 
 asteroids_random = generate_asteroids(
-                                num_asteroids=random.randint(20,20),
+                                num_asteroids=random.randint(10,20),
                                 position_range_x=(0, width),
                                 position_range_y=(0, height),
                                 speed_range=(0,300, 0),
@@ -63,7 +62,7 @@ game = KesslerGame(settings=game_settings)  # Use this to visualize the game sce
 
 # Evaluate the game
 pre = time.perf_counter()
-score, perf_data = game.run(scenario=adv_multi_ring_closing_left, controllers=[AkilaController(), TestController()])
+score, perf_data = game.run(scenario=my_test_scenario, controllers=[AkilaController(), TestController()])
 
 # Print out some general info about the result
 print('Scenario eval time: '+str(time.perf_counter()-pre))
