@@ -9,6 +9,7 @@ import math
 from typing import Dict, Any, List, Tuple, TypedDict, Optional
 from enum import Enum
 from collections import OrderedDict
+from immutabledict import immutabledict
 
 from .scenario import Scenario
 from .score import Score
@@ -38,7 +39,7 @@ class PerfDict(TypedDict, total=False):
     score_update: float
     graphics_draw: float
     total_frame_time: float
-
+    
 
 class KesslerGame:
     def __init__(self, settings: Optional[Dict[str, Any]] = None) -> None:
@@ -54,6 +55,7 @@ class KesslerGame:
         self.graphics_obj: Optional[KesslerGraphics] = settings.get("graphics_obj", None)
         self.realtime_multiplier: float = settings.get("realtime_multiplier", 0 if self.graphics_type==GraphicsType.NoGraphics else 1)
         self.time_limit: float = settings.get("time_limit", float("inf"))
+        self.random_ast_splits = settings.get("random_ast_splits", False)
 
         # UI settings
         default_ui = {'ships': True, 'lives_remaining': True, 'accuracy': True,
@@ -118,7 +120,7 @@ class KesslerGame:
             liveships = [ship for ship in ships if ship.alive]
 
             # Generate game_state info to send to controllers
-            game_state = {
+            game_state: immutabledict = immutabledict({
                 'asteroids': [asteroid.state for asteroid in asteroids],
                 'ships': [ship.state for ship in liveships],
                 'bullets': [bullet.state for bullet in bullets],
@@ -128,7 +130,7 @@ class KesslerGame:
                 'delta_time': self.time_step,
                 'sim_frame': step,
                 'time_limit': time_limit
-            }
+            })
 
             # Initialize controller time recording in performance tracker
             if self.perf_tracker:
@@ -209,7 +211,7 @@ class KesslerGame:
                         bullet.destruct()
                         bullet_remove_idxs.append(idx_bul)
                         # Asteroid destruct function and mark for removal
-                        asteroids.extend(asteroid.destruct(impactor=bullet))
+                        asteroids.extend(asteroid.destruct(impactor=bullet, random_ast_split=self.random_ast_splits))
                         asteroid_remove_idxs.add(idx_ast)
                         # Stop checking this bullet
                         break
@@ -230,7 +232,7 @@ class KesslerGame:
                         if dx * dx + dy * dy <= radius_sum * radius_sum:
                             mine.owner.asteroids_hit += 1
                             mine.owner.mines_hit += 1
-                            new_asteroids.extend(asteroid.destruct(impactor=mine))
+                            new_asteroids.extend(asteroid.destruct(impactor=mine, random_ast_split=self.random_ast_splits))
                             asteroid_remove_idxs.add(idx_ast)
                     for ship in liveships:
                         if not ship.is_respawning:
@@ -263,7 +265,7 @@ class KesslerGame:
                         # Most of the time no collision occurs, so use early exit to optimize collision check
                         if abs(dx) <= radius_sum and abs(dy) <= radius_sum and dx * dx + dy * dy <= radius_sum * radius_sum:
                             # Asteroid destruct function and mark for removal
-                            asteroids.extend(asteroid.destruct(impactor=ship))
+                            asteroids.extend(asteroid.destruct(impactor=ship, random_ast_split=self.random_ast_splits))
                             asteroid_remove_idxs.add(idx_ast)
                             # Ship destruct function. Add one to asteroids_hit
                             ship.asteroids_hit += 1
@@ -326,10 +328,13 @@ class KesslerGame:
             # Prevents unfairness where ship that dies before another gets score from its bullets as long as the other
             # is alive but the one that lives longer doesn't get the same benefit from its bullets/mines persisting
             # after it dies
-            elif not liveships and not len(mines) > 0 and not len(bullets) > 0:
+            elif not liveships and not (len(mines) > 0 or len(bullets) > 0):
                 stop_reason = StopReason.no_ships
             # All live ships are out of bullets and no bullets are on map
-            elif not sum([ship.bullets_remaining for ship in liveships]) and not len(bullets) > 0 and scenario.stop_if_no_ammo:
+            elif not sum([ship.bullets_remaining for ship in liveships]) > 0 \
+                    and not sum([ship.mines_remaining for ship in liveships])\
+                    and not (len(bullets) > 0 or len(mines) > 0) \
+                    and scenario.stop_if_no_ammo:
                 stop_reason = StopReason.out_of_bullets
             # Out of time
             elif sim_time > time_limit:

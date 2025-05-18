@@ -6,37 +6,45 @@
 import time
 
 from src.kesslergame import Scenario, KesslerGame, GraphicsType
-from test_controller import TestController
-from test_controller2 import TestController2
+from test_controller_fuzzy import FuzzyController
 from graphics_both import GraphicsBoth
 
 # Define game scenario
+# my_test_scenario = Scenario(name='Test Scenario',
+#                             num_asteroids=10,
+#                             ship_states=[
+#                                 {'position': (400, 400), 'angle': 0, 'lives': 3, 'team': 1, "mines_remaining": 3},
+#                                 # {'position': (400, 600), 'angle': 90, 'lives': 3, 'team': 2, "mines_remaining": 3},
+#                             ],
+#                             map_size=(1000, 800),
+#                             time_limit=60,
+#                             ammo_limit_multiplier=0,
+#                             stop_if_no_ammo=False)
+
 my_test_scenario = Scenario(name='Test Scenario',
-                            num_asteroids=10,
+                            asteroid_states=[{'position': (200, 400), 'angle': 0, 'speed': 0, 'size': 4}],
                             ship_states=[
                                 {'position': (400, 400), 'angle': 90, 'lives': 3, 'team': 1, "mines_remaining": 3},
-                                {'position': (400, 600), 'angle': 90, 'lives': 3, 'team': 2, "mines_remaining": 3},
+                                # {'position': (400, 600), 'angle': 90, 'lives': 3, 'team': 2, "mines_remaining": 3},
                             ],
                             map_size=(1000, 800),
                             time_limit=60,
                             ammo_limit_multiplier=0,
-                            stop_if_no_ammo=False,
-                            seed=8)
+                            stop_if_no_ammo=False)
 
 # Define Game Settings
 game_settings = {'perf_tracker': True,
                  'graphics_type': GraphicsType.Tkinter,
                  'realtime_multiplier': 1,
                  'graphics_obj': None,
-                 'frequency': 60,
-                 'random_ast_splits': True}
+                 'frequency': 60}
 
 game = KesslerGame(settings=game_settings)  # Use this to visualize the game scenario
 # game = TrainerEnvironment(settings=game_settings)  # Use this for max-speed, no-graphics simulation
 
 # Evaluate the game
 pre = time.perf_counter()
-score, perf_data = game.run(scenario=my_test_scenario, controllers=[TestController(), TestController2()])
+score, perf_data = game.run(scenario=my_test_scenario, controllers=[FuzzyController(), FuzzyController()])
 
 # Print out some general info about the result
 print('Scenario eval time: '+str(time.perf_counter()-pre))

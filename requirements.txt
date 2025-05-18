@@ -2,4 +2,4 @@ numpy
 pillow
 inputs
 mypy
-scikit-fuzzy
+immutabledict

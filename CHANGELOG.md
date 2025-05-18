@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.1.9] - 4 July 2024
+
+- Added missing package in `requirements.txt`
+
+## [2.1.8] - 4 July 2024
+
+- Changed the `game_state` dictionary that is passed to controllers to be type `immutabledict`. This prevents 
+  changing of `game_state` values by controllers to prevent tampering/affecting controllers later in the loop where 
+  it is passed. This is faster than passing copies of the dict and is still passed by reference.
+
+## [2.1.7] - 3 July 2024
+
+- Added optional Boolean setting `random_ast_splits` for game object instantiation. If `True`, left and right asteroid 
+  child asteroid vectors will be be random within a bounded range about the main child asteroid vector. By default 
+  is set to `False`.
+
+## [2.1.6] - 2 July 2024
+
+- Changed `stop_if_no_ammo` condition to also check mines. Also changed condition such that sum of mines and bullets 
+  remaining has to be > 0 since negative values are considered true.
+
 ## [2.1.5] - 18 April 2024
 
 - Added `Mines left` to TK graphics
