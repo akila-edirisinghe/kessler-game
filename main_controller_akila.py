@@ -10,6 +10,10 @@ from impact_time_cal import predict_collision
 import math, json
 
 
+#account for asteroids coming off screen
+#adding smarter mines  ISH
+# if limited bullets, don't spam. if not, keep shooting all the time.
+
 class AkilaController(KesslerController):
     def __init__(self):
         """
@@ -34,10 +38,11 @@ class AkilaController(KesslerController):
             '''
         with open('priorty_lookup_table.json', 'r') as json_file:
             self.lookup_table = json.load(json_file)
+          
         ...
         #add a frame counter to keep track of the time
     def get_fuzzy_values(self, size, impact_time, turn_time):
-         
+   
         if impact_time > 300:
             
             #print("\n","size", size, "impact time", impact_time, "turn time", turn_time,"\n")
@@ -60,6 +65,14 @@ class AkilaController(KesslerController):
         #consider wrapping asteroids and collision *consider the impact time so that priority will be inflated TODO ***
         #change priority for fuzzy logic to allow to shoot more asteroids within the same heading TODO *DONE
         #make it shoot no matter what and not wait until it reaches the asteroid it needs to shoot. TODO DONE
+        if game_state["time"] == 0:
+            self.delay = 0
+            self.asteroids_shot = []
+            self.rest_counter = 0
+            self.prev_best_ast = None
+            
+        #1 bullet every 3 frames
+        # current frame, turning and shooting at the same time,  bullet goes where u were looking
         
         """
         Method processed each time step by this controller to determine what control actions to take
@@ -74,9 +87,11 @@ class AkilaController(KesslerController):
             bool: fire control value. Shoots if true
             bool: mine deployment control value. Lays mine if true
         """
+        
         #pixels per frame
+        #bullet speed frames aka how many pixels the bullet move in one frame
         bsf  = 800/30
-        heading = ship_state['heading']
+        heading = ship_state['heading'] # angle between 0-360 your ship is facing.
         fire = False
         drop_mine = False
         
@@ -87,10 +102,13 @@ class AkilaController(KesslerController):
         found_prev_best_ast = False
         #print("asteroids in the game", len(game_state['asteroids']))
         #picking the closest asteroid
+        '''
+        filtering out asteroids that have been shot aka we need not shot ones
+        '''
         for asteroid in game_state['asteroids']:
             asteroids_already_shot = False
             for shot_ast in self.asteroids_shot:
-                    if shot_ast["velocity"] == asteroid["velocity"] and shot_ast["size"] == asteroid["size"] :
+                    if shot_ast["velocity"] == asteroid["velocity"] and shot_ast["size"] == asteroid["size"] : #identifer - [velocity, size]
                         asteroids_already_shot = True
                         break
             if asteroids_already_shot == True:
@@ -99,6 +117,7 @@ class AkilaController(KesslerController):
             asteroid_size = asteroid['size']
             impact_time_interval= predict_collision(ship_state['position'], (0,0), 20, asteroid['position'], asteroid['velocity'], asteroid['radius'])
             
+            # 0 start time of collision, 1 end time of collision - impact_time_interval 
             turn_time = 0
             impact_time = 0
             #nan not impact
@@ -142,7 +161,7 @@ class AkilaController(KesslerController):
            #if isinstance(impact_time, int):
             
             #priority = get_priority(asteroid_size,impact_time, turn_time)
-            
+            print
             priority = self.get_fuzzy_values(asteroid_size,round(impact_time), turn_time)
             #rounding priority
             priority = round(priority)
@@ -154,6 +173,7 @@ class AkilaController(KesslerController):
             if self.prev_best_ast is not None:
                 prev_asteroids_pos.append(self.prev_best_ast["position"][0] +self.prev_best_ast["velocity"][0]/30)
                 prev_asteroids_pos.append(self.prev_best_ast["position"][1] +self.prev_best_ast["velocity"][1]/30)
+                
                 if math.isclose(prev_asteroids_pos[0],asteroid["position"][0]) and math.isclose(prev_asteroids_pos[1],asteroid["position"][1]) and self.prev_best_ast["size"] == asteroid["size"] :
                     prev_prio = self.prev_best_ast["priority"]
                     self.prev_best_ast = dict(asteroid)
@@ -196,30 +216,27 @@ class AkilaController(KesslerController):
             return 0, 0, fire, False
         
         
-       
+        
          #meaning it is the first
         best_ast["priority"] = highest_prio
         if found_prev_best_ast == False:
+            #f no target before, then we pick best target this frame
             self.prev_best_ast = best_ast 
         else:
+            #other wise, we already have best target, then we stick with best target UNLESS highest target asteroid is a greater threat by more than 1/
             if abs(self.prev_best_ast["priority"] - best_ast["priority"]) <=1:
                 best_ast = self.prev_best_ast
             else:
                 self.prev_best_ast = best_ast
         
-       
-
         a_distance = math.sqrt((best_ast['position'][0] - ship_state['position'][0])**2 + (best_ast['position'][1] - ship_state['position'][1])**2)
-
-        
+  
         #predicting the position of the asteroid in the future
          
         time_bullet = a_distance/bsf + 1 #frames
         #time_bullet  = 0
         future_ast_x = best_ast["position"][0] + time_bullet*(best_ast["velocity"][0]/30)
         future_ast_y = best_ast["position"][1] + time_bullet*(best_ast["velocity"][1]/30)
-        
-       
         
         #delaying so that you wait for the ship to finish turning before firing
         if self.delay == 1:
@@ -252,9 +269,9 @@ class AkilaController(KesslerController):
         #turning towards the desired angle // finding which direction to turn
         
         #telling it to keep turning
-        if abs(desired_angle - heading) > 6:
-            turn_rate = turn_direction*180 
-            
+        if abs(desired_angle - heading) > 6: #180/30 num of degrees u can turn per frame.
+            turn_rate = turn_direction*180   # 180 degrees per second aka fastest u can turn.
+        #turn rate- degrees per second
            
         #telling it to turn slowly or stop turning
         else:
