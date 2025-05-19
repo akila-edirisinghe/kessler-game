@@ -9,6 +9,56 @@ from fuzzylogic import get_priority
 from impact_time_cal import predict_collision
 import math, json
 
+import time
+
+PRINT_EXPLANATION = True
+NO_PRINTS = False
+
+_last_print_time = 0
+_last_firing_print_time = 0
+_last_mine_drop_print_time = 0
+
+_print_interval = 1.0              # normal messages print interval in seconds
+_firing_print_interval = 3.0       # firing messages print interval in seconds
+_mine_drop_cooldown = 10.0         # cooldown between mine drop prints in seconds (optional)
+
+_mine_dropped_last = False  # Track if previous call was a mine drop
+
+def log_explanation(message: str):
+    global _last_print_time, _last_firing_print_time, _last_mine_drop_print_time, _mine_dropped_last
+    if NO_PRINTS:
+        return
+
+    message_lower = message.lower()
+    is_mine_drop = "mine" in message_lower
+    is_firing = "action" in message_lower or "decision" in message_lower
+
+    current_time = time.time()
+
+    if PRINT_EXPLANATION:
+        if is_mine_drop:
+            if not _mine_dropped_last:
+                # Print once per new mine drop event
+                print(message)
+                _last_mine_drop_print_time = current_time
+                _mine_dropped_last = True
+            # else: suppress repeated mine drop prints until a non-mine drop event happens
+        else:
+            _mine_dropped_last = False  # Reset flag when no mine drop in this call
+
+            if is_firing:
+                if current_time - _last_firing_print_time >= _firing_print_interval:
+                    print(message)
+                    _last_firing_print_time = current_time
+            else:
+                if current_time - _last_print_time >= _print_interval:
+                    print(message)
+                    _last_print_time = current_time
+    else:
+        with open('explanations_akila.txt', 'a+') as file:
+            file.write(message + '\n')
+
+
 
 #account for asteroids coming off screen
 #adding smarter mines  ISH
@@ -53,6 +103,11 @@ class AkilaController(KesslerController):
         return self.lookup_table[key]
 
     def actions(self, ship_state: Dict, game_state: Dict) -> Tuple[float, float, bool, bool]:
+        
+        
+        
+        
+        
         #consider where the asteroid will be in like 2 or 3 seconds in the future and turn towards it(consideration)
         #priority system /use fuzzy logic for this part
         #for invulnerability, check if you are going to hit or not. if no collision, start firing
@@ -87,7 +142,9 @@ class AkilaController(KesslerController):
             bool: fire control value. Shoots if true
             bool: mine deployment control value. Lays mine if true
         """
-        
+        if not hasattr(self, "last_logged_target_pos"):
+            self.last_logged_target_pos = None
+
         #pixels per frame
         #bullet speed frames aka how many pixels the bullet move in one frame
         bsf  = 800/30
@@ -161,7 +218,7 @@ class AkilaController(KesslerController):
            #if isinstance(impact_time, int):
             
             #priority = get_priority(asteroid_size,impact_time, turn_time)
-            print
+            
             priority = self.get_fuzzy_values(asteroid_size,round(impact_time), turn_time)
             #rounding priority
             priority = round(priority)
@@ -194,6 +251,7 @@ class AkilaController(KesslerController):
                 if impact_time_interval[0]*30 <= 7 :
                     if (asteroid["velocity"] not in self.asteroids_shot ) :#or ship_state["lives_remaining"] > 1
                         drop_mine = True
+                        
                        
                                     
             if best_ast is None or priority > highest_prio:
@@ -209,25 +267,33 @@ class AkilaController(KesslerController):
             
             if self.delay == 1:
                 fire = True
+                log_explanation("[Action] Fired a bullet (default behavior, no target)")
                 self.delay = 0  
             else:
                 fire = False
             self.asteroids_shot = [ast for ast in self.asteroids_shot if ast["sim_frame"] > game_state["sim_frame"]]
             return 0, 0, fire, False
         
-        
+        best_ast["priority"] = highest_prio
         
          #meaning it is the first
-        best_ast["priority"] = highest_prio
-        if found_prev_best_ast == False:
-            #f no target before, then we pick best target this frame
-            self.prev_best_ast = best_ast 
+        if not found_prev_best_ast:
+            if self.last_logged_target_pos != tuple(best_ast["position"]):
+                log_explanation(f"[Target] New asteroid selected at {tuple(round(x,1)for x in best_ast['position'])} with priority {highest_prio}")
+                self.last_logged_target_pos = tuple(best_ast["position"])
+            self.prev_best_ast = best_ast
+
         else:
-            #other wise, we already have best target, then we stick with best target UNLESS highest target asteroid is a greater threat by more than 1/
-            if abs(self.prev_best_ast["priority"] - best_ast["priority"]) <=1:
+            if abs(self.prev_best_ast["priority"] - best_ast["priority"]) <= 1:
                 best_ast = self.prev_best_ast
+                log_explanation(f"[Decision] Staying on target at ({round(best_ast['position'][0],1):.2f}, {round(best_ast['position'][1],1):.2f}) — priority change insignificant ({best_ast['priority']} vs {self.prev_best_ast['priority']})")
+
             else:
+                if self.last_logged_target_pos != tuple(best_ast["position"]):
+                    log_explanation(f"[Target] Switching to new higher-priority asteroid at {round(best_ast['position'],1)}")
+                    self.last_logged_target_pos = tuple(best_ast["position"])
                 self.prev_best_ast = best_ast
+
         
         a_distance = math.sqrt((best_ast['position'][0] - ship_state['position'][0])**2 + (best_ast['position'][1] - ship_state['position'][1])**2)
   
@@ -292,7 +358,16 @@ class AkilaController(KesslerController):
         if ship_state["is_respawning"] :
             fire = False
         
+        
+        if fire:
+            log_explanation(f"[Action] Firing at asteroid at predicted position ({round(future_ast_x,1):.1f}, {round(future_ast_y,1):.1f})")
+        else:
+            log_explanation("[Decision] Holding fire — no valid target or wrong angle")
+        if drop_mine:
+            log_explanation(f"[Action] Dropping mine for asteroid at {tuple(round(x,1)for x in best_ast['position'])}")
         return thrust, turn_rate, fire, drop_mine
+
+    
 
     @property
     def name(self) -> str:
@@ -304,6 +379,10 @@ class AkilaController(KesslerController):
         """
         return "hitormiss v0.0"
     
-    
+    @property
+    def custom_sprite_path(self)->str:
+        return "akila's turtle fortress spaceship sprite.png"
     
 #change best_ast to self.best_ast
+
+

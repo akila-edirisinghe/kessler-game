@@ -9,7 +9,8 @@ import math
 from typing import Dict, Any, List, Tuple, TypedDict, Optional
 from enum import Enum
 from collections import OrderedDict
-from immutabledict import immutabledict
+from types import MappingProxyType
+
 
 from .scenario import Scenario
 from .score import Score
@@ -120,7 +121,7 @@ class KesslerGame:
             liveships = [ship for ship in ships if ship.alive]
 
             # Generate game_state info to send to controllers
-            game_state: immutabledict = immutabledict({
+            game_state = MappingProxyType({
                 'asteroids': [asteroid.state for asteroid in asteroids],
                 'ships': [ship.state for ship in liveships],
                 'bullets': [bullet.state for bullet in bullets],
