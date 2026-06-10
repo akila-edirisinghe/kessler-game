@@ -9,6 +9,7 @@ from main_controller_akila import AkilaController
 from graphics_both import GraphicsBoth
 from xfc_2023_replica_scenarios import *
 from test_controller import TestController
+from aimbot_controller import AimbotController
 import sys 
 
 xfc2023 = [ex_adv_four_corners_pt0,ex_adv_four_corners_pt1, ex_adv_four_corners_pt2, ex_adv_asteroids_down_up_pt1, ex_adv_asteroids_down_up_pt2,
@@ -64,7 +65,7 @@ my_test_scenario = Scenario(name='Test Scenario',
 # Define Game Settings
 game_settings = {'perf_tracker': True,
                  'graphics_type': GraphicsType.Tkinter,
-                 'realtime_multiplier': 3,
+                 'realtime_multiplier': 10,
                  'graphics_obj': None,
                  'frequency': 1000}
 
@@ -73,7 +74,7 @@ game = KesslerGame(settings=game_settings)  # Use this to visualize the game sce
 
 # Evaluate the game
 pre = time.perf_counter()
-score, perf_data = game.run(scenario=xfc2023[int(sys.argv[1])], controllers=[AkilaController(), TestController()])
+score, perf_data = game.run(scenario=xfc2023[int(sys.argv[1])], controllers=[AkilaController(), AimbotController()])
 
 # Print out some general info about the result
 print('Scenario eval time: '+str(time.perf_counter()-pre))

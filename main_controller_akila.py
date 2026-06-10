@@ -3,7 +3,7 @@
 
 from src.kesslergame import KesslerController
 from typing import Dict, Tuple
-from impact_time_cal import predict_collision, solve_quadratic
+from impact_time_cal import predict_collision
 import math, json, time
 
 # ── Print / logging config ───────────────────────────────────────────────────
@@ -15,6 +15,7 @@ _last_firing_print_time    = 0.0
 _last_mine_drop_print_time = 0.0
 _print_interval            = 1.0
 _firing_print_interval     = 3.0
+_mine_drop_cooldown        = 10.0
 _mine_dropped_last         = False
 
 
@@ -24,8 +25,8 @@ def log_explanation(message: str):
         return
 
     message_lower = message.lower()
-    is_mine_drop  = "mine"   in message_lower
-    is_firing     = "action" in message_lower or "decision" in message_lower
+    is_mine_drop  = "mine"     in message_lower
+    is_firing     = "action"   in message_lower or "decision" in message_lower
     current_time  = time.time()
 
     if PRINT_EXPLANATION:
@@ -49,82 +50,59 @@ def log_explanation(message: str):
             f.write(message + '\n')
 
 
-# ── Analytic bullet intercept ────────────────────────────────────────────────
-def aim_intercept(ship_pos: tuple, asteroid: dict,
-                  bullet_speed_px_per_frame: float) -> tuple:
+# ── Iterative intercept ──────────────────────────────────────────────────────
+def predict_intercept(ship_pos: tuple, asteroid: dict,
+                      bullet_speed_per_frame: float,
+                      iterations: int = 4) -> tuple:
     """
-    Solves exactly for where a bullet fired from ship_pos at speed B px/frame
-    will meet an asteroid moving at (avx, avy) px/s.
+    Returns (future_x, future_y, time_bullet_frames).
 
-    Math: let dx = ax-sx, dy = ay-sy, avx/avy in px/FRAME (divide by 30).
-    We need: (dx + avx*t)^2 + (dy + avy*t)^2 = (B*t)^2
-    => (avx^2 + avy^2 - B^2)*t^2 + 2*(dx*avx + dy*avy)*t + (dx^2 + dy^2) = 0
+    Iteratively refines the intercept point:
+      1. Estimate travel time to current asteroid position.
+      2. Project asteroid forward by that time.
+      3. Re-estimate travel time to the new projected position.
+      4. Repeat until converged (4 iterations is enough for any speed).
 
-    Uses solve_quadratic from impact_time_cal.py.
-    Returns (angle_deg, tof_frames, intercept_x, intercept_y).
-
-    angle_deg is a raw atan2 result in (-180, 180] — do NOT apply % 360.
-    The turn logic uses angle_diff() which already handles wrap-around.
+    No +1 fudge-factor needed — the iteration handles moving targets correctly.
     """
-    sx, sy = ship_pos
-    ax, ay = asteroid["position"]
-    # convert px/s → px/frame
-    avx = asteroid["velocity"][0] / 30.0
-    avy = asteroid["velocity"][1] / 30.0
-    B   = bullet_speed_px_per_frame
+    ax, ay   = asteroid["position"]
+    avx, avy = asteroid["velocity"]
 
-    dx = ax - sx
-    dy = ay - sy
+    dist = math.sqrt((ax - ship_pos[0])**2 + (ay - ship_pos[1])**2)
+    t    = dist / bullet_speed_per_frame      # frames
 
-    a_coef = avx * avx + avy * avy - B * B
-    b_coef = 2.0 * (dx * avx + dy * avy)
-    c_coef = dx * dx + dy * dy
+    for _ in range(iterations):
+        # asteroid velocity is px/s; divide by 30 to get px/frame
+        fx = ax + t * (avx / 30.0)
+        fy = ay + t * (avy / 30.0)
+        new_dist = math.sqrt((fx - ship_pos[0])**2 + (fy - ship_pos[1])**2)
+        t = new_dist / bullet_speed_per_frame
 
-    t1, t2 = solve_quadratic(a_coef, b_coef, c_coef)
-
-    # Pick smallest positive root
-    tof = None
-    for t in (t1, t2):
-        if not math.isnan(t) and t > 0.0:
-            if tof is None or t < tof:
-                tof = t
-
-    # Fallback for stationary asteroid or numerical edge case
-    if tof is None or tof <= 0.0:
-        dist = math.sqrt(dx * dx + dy * dy)
-        tof  = dist / B if B > 0.0 else 1.0
-
-    ix    = ax + avx * tof
-    iy    = ay + avy * tof
-    # IMPORTANT: return raw atan2, do NOT wrap to [0, 360).
-    # angle_diff() handles the [-180, 180] range correctly for turn direction.
-    angle = math.degrees(math.atan2(iy - sy, ix - sx))
-    return angle, tof, ix, iy
+    fx = ax + t * (avx / 30.0)
+    fy = ay + t * (avy / 30.0)
+    return fx, fy, t
 
 
 # ── Shortest signed angular difference ──────────────────────────────────────
 def angle_diff(target_deg: float, current_deg: float) -> float:
-    """
-    Signed shortest path from current_deg to target_deg.
-    Result is always in [-180, 180].
-    Works correctly for all values including near 0/360 wraparound.
-    """
+    """Signed shortest path from current_deg to target_deg, result in [-180, 180]."""
     return (target_deg - current_deg + 180.0) % 360.0 - 180.0
 
 
 # ── Impact-time frames from predict_collision interval ───────────────────────
 def impact_frames(interval: tuple) -> float:
     """
-    Convert (t_start, t_end) seconds to frames for the fuzzy table.
-    0    = currently colliding / always colliding
-    300  = no future collision
-    t*30 = frames until impact (capped at 300)
+    Convert a (t_start, t_end) collision interval (seconds) to frames.
+    Returns:
+      0    — currently colliding / permanently inside
+      300  — no future collision
+      t_start*30 — future collision, capped at 300
     """
     t0, t1 = interval
-    if math.isinf(t0):   return 0.0    # permanently inside
-    if math.isnan(t0):   return 300.0  # no collision
-    if t0 <= 0.0 <= t1:  return 0.0    # currently colliding
-    if t1 <= 0.0:        return 300.0  # collision already passed
+    if math.isinf(t0):   return 0.0
+    if math.isnan(t0):   return 300.0
+    if t0 <= 0.0 <= t1:  return 0.0
+    if t1 <= 0.0:        return 300.0
     return min(t0 * 30.0, 300.0)
 
 
@@ -142,7 +120,7 @@ class AkilaController(KesslerController):
         with open('priorty_lookup_table.json', 'r') as f:
             self.lookup_table = json.load(f)
 
-        # 800 px/s bullet at 30 fps
+        # bullet speed in pixels-per-frame  (800 px/s ÷ 30 fps)
         self.bsf = 800.0 / 30.0
 
     # ── Fuzzy lookup ─────────────────────────────────────────────────────────
@@ -157,6 +135,7 @@ class AkilaController(KesslerController):
 
         current_frame = game_state["frame"]
 
+        # Reset everything at scenario start
         if game_state["time"] == 0:
             self.delay                  = 0
             self.asteroids_shot         = []
@@ -173,7 +152,7 @@ class AkilaController(KesslerController):
         highest_prio        = -math.inf
         found_prev_best_ast = False
 
-        # Prune expired shot records
+        # ── Prune expired shot records ────────────────────────────────────────
         self.asteroids_shot = [
             a for a in self.asteroids_shot
             if a["sim_frame"] > current_frame
@@ -182,6 +161,7 @@ class AkilaController(KesslerController):
         # ── Score every un-shot asteroid ──────────────────────────────────────
         for asteroid in game_state['asteroids']:
 
+            # Skip if we already have a bullet en-route to this asteroid
             already_shot = any(
                 s["velocity"] == asteroid["velocity"] and s["size"] == asteroid["size"]
                 for s in self.asteroids_shot
@@ -194,18 +174,24 @@ class AkilaController(KesslerController):
                 ship_pos, (0, 0), 20,
                 asteroid['position'], asteroid['velocity'], asteroid['radius']
             )
+
+            # Collision interval → frame count safe for fuzzy table
             imp_time = impact_frames(impact_time_interval)
 
-            # Analytic intercept angle for turn_time estimate
-            aim_angle, tof, _, _ = aim_intercept(ship_pos, asteroid, self.bsf)
-            diff      = abs(angle_diff(aim_angle, heading))
+            # Iterative intercept for turn-time estimate
+            fx, fy, t_bullet = predict_intercept(ship_pos, asteroid, self.bsf)
+            desired_angle    = math.degrees(math.atan2(fy - ship_pos[1], fx - ship_pos[0]))
+
+            # Shortest-path angular error → turn_time in frames
+            diff      = abs(angle_diff(desired_angle, heading))
             turn_time = min(round(diff / 6.0), 29)
 
+            # Fuzzy priority
             priority = round(self.get_fuzzy_values(
                 asteroid_size, round(imp_time), turn_time
             ))
 
-            # Mine drop: asteroid about to hit us within 7 frames
+            # Mine logic: drop when asteroid is about to hit us
             if (not ship_state["is_respawning"]
                     and ship_state["mines_remaining"] > 0
                     and imp_time != 0.0
@@ -214,11 +200,12 @@ class AkilaController(KesslerController):
                     and imp_time <= 7.0):
                 drop_mine = True
 
-            # Track whether this is the same asteroid as last frame
+            # Check if this is the same asteroid we targeted last frame
             if self.prev_best_ast is not None:
                 pa     = self.prev_best_ast
                 pred_x = pa["position"][0] + pa["velocity"][0] / 30.0
                 pred_y = pa["position"][1] + pa["velocity"][1] / 30.0
+
                 if (math.isclose(pred_x, asteroid["position"][0], abs_tol=1.0)
                         and math.isclose(pred_y, asteroid["position"][1], abs_tol=1.0)
                         and pa["size"] == asteroid["size"]):
@@ -246,9 +233,9 @@ class AkilaController(KesslerController):
             pos_key = tuple(best_ast["position"])
             if self.last_logged_target_pos != pos_key:
                 log_explanation(
-                    f"[Target] New asteroid at "
+                    f"[Target] New asteroid selected at "
                     f"{tuple(round(x,1) for x in best_ast['position'])} "
-                    f"priority={highest_prio}"
+                    f"with priority {highest_prio}"
                 )
                 self.last_logged_target_pos = pos_key
             self.prev_best_ast = best_ast
@@ -256,48 +243,54 @@ class AkilaController(KesslerController):
             if abs(self.prev_best_ast["priority"] - best_ast["priority"]) <= 1:
                 best_ast = self.prev_best_ast
                 log_explanation(
-                    f"[Decision] Holding target at "
+                    f"[Decision] Staying on target at "
                     f"({round(best_ast['position'][0],1):.2f}, "
-                    f"{round(best_ast['position'][1],1):.2f})"
+                    f"{round(best_ast['position'][1],1):.2f}) "
+                    f"— priority change insignificant "
+                    f"({best_ast['priority']} vs {self.prev_best_ast['priority']})"
                 )
             else:
                 pos_key = tuple(best_ast["position"])
                 if self.last_logged_target_pos != pos_key:
                     log_explanation(
-                        f"[Target] Switching → priority={highest_prio} at "
+                        f"[Target] Switching to new higher-priority asteroid at "
                         f"{tuple(round(x,1) for x in best_ast['position'])}"
                     )
                     self.last_logged_target_pos = pos_key
                 self.prev_best_ast = best_ast
 
-        # ── Analytic intercept for the chosen target ──────────────────────────
-        aim_angle, tof, ix, iy = aim_intercept(ship_pos, best_ast, self.bsf)
+        # ── Compute firing angle with iterative intercept ─────────────────────
+        fx, fy, t_bullet = predict_intercept(ship_pos, best_ast, self.bsf)
 
-        # aim_angle is raw atan2 in (-180, 180] — pass directly to angle_diff.
-        # Do NOT apply % 360 here; that is the bug that broke near-0° targets.
-        diff     = angle_diff(aim_angle, heading)   # signed, in [-180, 180]
+        desired_angle  = math.degrees(math.atan2(fy - ship_pos[1], fx - ship_pos[0]))
+        desired_angle %= 360.0      # normalise to [0, 360)
+
+        # ── Turn rate using signed shortest-path diff ─────────────────────────
+        diff     = angle_diff(desired_angle, heading)   # signed, [-180, 180]
         abs_diff = abs(diff)
 
-        # ── Turn rate ─────────────────────────────────────────────────────────
         if abs_diff > 6.0:
+            # Full-speed turn in the correct direction
             turn_rate = math.copysign(180.0, diff)
         else:
-            # Proportional slow-down as we close in on the target angle
+            # Proportional slow-down as we close on the target angle
             turn_rate = 30.0 * diff
 
-            # Aligned — arm fire delay
+            # Aligned — arm the delay so we fire on the next eligible frame
             if current_frame - self.rest_counter >= 2:
                 self.delay = 1
                 if best_ast is not None:
                     record              = dict(best_ast)
-                    record["sim_frame"] = current_frame + int(tof) + 5
+                    record["sim_frame"] = current_frame + int(t_bullet) + 5
                     self.asteroids_shot.append(record)
 
-        # ── Fire ──────────────────────────────────────────────────────────────
+        # ── Fire when delay has been armed ────────────────────────────────────
         if self.delay == 1:
             self.rest_counter = current_frame
             fire       = True
             self.delay = 0
+
+        thrust = 0
 
         # Suppress fire while respawn-invulnerable
         if ship_state["is_respawning"]:
@@ -306,22 +299,19 @@ class AkilaController(KesslerController):
         # ── Logging ──────────────────────────────────────────────────────────
         if fire:
             log_explanation(
-                f"[Action] Firing → intercept ({round(ix,1):.1f}, {round(iy,1):.1f}) "
-                f"tof={tof:.1f}f err={abs_diff:.2f}°"
+                f"[Action] Firing at asteroid at predicted position "
+                f"({round(fx,1):.1f}, {round(fy,1):.1f})"
             )
         else:
-            log_explanation(
-                f"[Decision] Turning, err={abs_diff:.1f}° "
-                f"aim={aim_angle:.1f}° heading={heading:.1f}°"
-            )
+            log_explanation("[Decision] Holding fire — no valid target or wrong angle")
 
         if drop_mine:
             log_explanation(
-                f"[Action] Dropping mine, asteroid at "
+                f"[Action] Dropping mine for asteroid at "
                 f"{tuple(round(x,1) for x in best_ast['position'])}"
             )
 
-        return 0, turn_rate, fire, drop_mine
+        return thrust, turn_rate, fire, drop_mine
 
     @property
     def name(self) -> str:
