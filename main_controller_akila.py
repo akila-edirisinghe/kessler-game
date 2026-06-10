@@ -1,28 +1,22 @@
 # -*- coding: utf-8 -*-
 # Copyright © 2022 Thales. All Rights Reserved.
-# NOTICE: This file is subject to the license agreement defined in file 'LICENSE', which is part of
-# this source code package.
 
 from src.kesslergame import KesslerController
 from typing import Dict, Tuple
-from fuzzylogic import get_priority
-from impact_time_cal import predict_collision
-import math, json
+from impact_time_cal import predict_collision, solve_quadratic
+import math, json, time
 
-import time
-
+# ── Print / logging config ───────────────────────────────────────────────────
 PRINT_EXPLANATION = True
-NO_PRINTS = False
+NO_PRINTS         = False
 
-_last_print_time = 0
-_last_firing_print_time = 0
-_last_mine_drop_print_time = 0
+_last_print_time           = 0.0
+_last_firing_print_time    = 0.0
+_last_mine_drop_print_time = 0.0
+_print_interval            = 1.0
+_firing_print_interval     = 3.0
+_mine_dropped_last         = False
 
-_print_interval = 1.0              # normal messages print interval in seconds
-_firing_print_interval = 3.0       # firing messages print interval in seconds
-_mine_drop_cooldown = 10.0         # cooldown between mine drop prints in seconds (optional)
-
-_mine_dropped_last = False  # Track if previous call was a mine drop
 
 def log_explanation(message: str):
     global _last_print_time, _last_firing_print_time, _last_mine_drop_print_time, _mine_dropped_last
@@ -30,22 +24,18 @@ def log_explanation(message: str):
         return
 
     message_lower = message.lower()
-    is_mine_drop = "mine" in message_lower
-    is_firing = "action" in message_lower or "decision" in message_lower
-
-    current_time = time.time()
+    is_mine_drop  = "mine"   in message_lower
+    is_firing     = "action" in message_lower or "decision" in message_lower
+    current_time  = time.time()
 
     if PRINT_EXPLANATION:
         if is_mine_drop:
             if not _mine_dropped_last:
-                # Print once per new mine drop event
                 print(message)
                 _last_mine_drop_print_time = current_time
                 _mine_dropped_last = True
-            # else: suppress repeated mine drop prints until a non-mine drop event happens
         else:
-            _mine_dropped_last = False  # Reset flag when no mine drop in this call
-
+            _mine_dropped_last = False
             if is_firing:
                 if current_time - _last_firing_print_time >= _firing_print_interval:
                     print(message)
@@ -55,335 +45,288 @@ def log_explanation(message: str):
                     print(message)
                     _last_print_time = current_time
     else:
-        with open('explanations_akila.txt', 'a+') as file:
-            file.write(message + '\n')
+        with open('explanations_akila.txt', 'a+') as f:
+            f.write(message + '\n')
 
 
+# ── Analytic bullet intercept ────────────────────────────────────────────────
+def aim_intercept(ship_pos: tuple, asteroid: dict,
+                  bullet_speed_px_per_frame: float) -> tuple:
+    """
+    Solves exactly for where a bullet fired from ship_pos at speed B px/frame
+    will meet an asteroid moving at (avx, avy) px/s.
 
-#account for asteroids coming off screen
-#adding smarter mines  ISH
-# if limited bullets, don't spam. if not, keep shooting all the time.
+    Math: let dx = ax-sx, dy = ay-sy, avx/avy in px/FRAME (divide by 30).
+    We need: (dx + avx*t)^2 + (dy + avy*t)^2 = (B*t)^2
+    => (avx^2 + avy^2 - B^2)*t^2 + 2*(dx*avx + dy*avy)*t + (dx^2 + dy^2) = 0
 
+    Uses solve_quadratic from impact_time_cal.py.
+    Returns (angle_deg, tof_frames, intercept_x, intercept_y).
+
+    angle_deg is a raw atan2 result in (-180, 180] — do NOT apply % 360.
+    The turn logic uses angle_diff() which already handles wrap-around.
+    """
+    sx, sy = ship_pos
+    ax, ay = asteroid["position"]
+    # convert px/s → px/frame
+    avx = asteroid["velocity"][0] / 30.0
+    avy = asteroid["velocity"][1] / 30.0
+    B   = bullet_speed_px_per_frame
+
+    dx = ax - sx
+    dy = ay - sy
+
+    a_coef = avx * avx + avy * avy - B * B
+    b_coef = 2.0 * (dx * avx + dy * avy)
+    c_coef = dx * dx + dy * dy
+
+    t1, t2 = solve_quadratic(a_coef, b_coef, c_coef)
+
+    # Pick smallest positive root
+    tof = None
+    for t in (t1, t2):
+        if not math.isnan(t) and t > 0.0:
+            if tof is None or t < tof:
+                tof = t
+
+    # Fallback for stationary asteroid or numerical edge case
+    if tof is None or tof <= 0.0:
+        dist = math.sqrt(dx * dx + dy * dy)
+        tof  = dist / B if B > 0.0 else 1.0
+
+    ix    = ax + avx * tof
+    iy    = ay + avy * tof
+    # IMPORTANT: return raw atan2, do NOT wrap to [0, 360).
+    # angle_diff() handles the [-180, 180] range correctly for turn direction.
+    angle = math.degrees(math.atan2(iy - sy, ix - sx))
+    return angle, tof, ix, iy
+
+
+# ── Shortest signed angular difference ──────────────────────────────────────
+def angle_diff(target_deg: float, current_deg: float) -> float:
+    """
+    Signed shortest path from current_deg to target_deg.
+    Result is always in [-180, 180].
+    Works correctly for all values including near 0/360 wraparound.
+    """
+    return (target_deg - current_deg + 180.0) % 360.0 - 180.0
+
+
+# ── Impact-time frames from predict_collision interval ───────────────────────
+def impact_frames(interval: tuple) -> float:
+    """
+    Convert (t_start, t_end) seconds to frames for the fuzzy table.
+    0    = currently colliding / always colliding
+    300  = no future collision
+    t*30 = frames until impact (capped at 300)
+    """
+    t0, t1 = interval
+    if math.isinf(t0):   return 0.0    # permanently inside
+    if math.isnan(t0):   return 300.0  # no collision
+    if t0 <= 0.0 <= t1:  return 0.0    # currently colliding
+    if t1 <= 0.0:        return 300.0  # collision already passed
+    return min(t0 * 30.0, 300.0)
+
+
+# ── Main Controller ──────────────────────────────────────────────────────────
 class AkilaController(KesslerController):
+
     def __init__(self):
-        """
-        Any variables or initialization desired for the controller can be set up here
-        """
-        self.delay = 0
-        self.asteroids_shot = []
-        self.rest_counter = 0
-        self.lookup_table = {}
-        self.prev_best_ast = None
-        
-        '''
-        priority_lookup = {}
-        for size in range(1,5):
-            for impact_time in range(301):
-                for turn_time in range(31):
-                    
-                    priority_lookup[f"{size},{impact_time},{turn_time}"] = get_priority(size,impact_time, turn_time)
-                    
-        with open('priorty_lookup_table.json', 'w') as json_file:
-            json.dump(priority_lookup, json_file)
-            '''
-        with open('priorty_lookup_table.json', 'r') as json_file:
-            self.lookup_table = json.load(json_file)
-          
-        ...
-        #add a frame counter to keep track of the time
-    def get_fuzzy_values(self, size, impact_time, turn_time):
-   
-        if impact_time > 300:
-            
-            #print("\n","size", size, "impact time", impact_time, "turn time", turn_time,"\n")
-            impact_time = 300
-                     
-        #print("\n","size", size, "impact time", impact_time, "turn time", turn_time,"\n")
+        self.delay                  = 0
+        self.asteroids_shot         = []
+        self.rest_counter           = 0
+        self.lookup_table           = {}
+        self.prev_best_ast          = None
+        self.last_logged_target_pos = None
+
+        with open('priorty_lookup_table.json', 'r') as f:
+            self.lookup_table = json.load(f)
+
+        # 800 px/s bullet at 30 fps
+        self.bsf = 800.0 / 30.0
+
+    # ── Fuzzy lookup ─────────────────────────────────────────────────────────
+    def get_fuzzy_values(self, size: int, impact_time: int, turn_time: int) -> float:
+        impact_time = min(impact_time, 300)
+        turn_time   = min(turn_time,   29)   # table keys only go 0-29
         key = f"{size},{impact_time},{turn_time}"
-        return self.lookup_table[key]
+        return self.lookup_table.get(key, 1.0)
 
+    # ── Main action method ────────────────────────────────────────────────────
     def actions(self, ship_state: Dict, game_state: Dict) -> Tuple[float, float, bool, bool]:
-        
-        
-        
-        
-        
-        #consider where the asteroid will be in like 2 or 3 seconds in the future and turn towards it(consideration)
-        #priority system /use fuzzy logic for this part
-        #for invulnerability, check if you are going to hit or not. if no collision, start firing
-        
-   
-        # rounding stuff and then creating a lookup table. //json or pickle to store the data. TODO DONE
-        # u can check the future asteroid position for if it is going off screen and if the bullet won'T make it in time.
-        # including mines in the future prediction( u are already doing the calculations for it) kamikaze mines TODO ***  DONE 
-        #edge case = asteroids not moving -- ex_adv_four_corners_pt1 TODO *** DONE
-        #consider wrapping asteroids and collision *consider the impact time so that priority will be inflated TODO ***
-        #change priority for fuzzy logic to allow to shoot more asteroids within the same heading TODO *DONE
-        #make it shoot no matter what and not wait until it reaches the asteroid it needs to shoot. TODO DONE
+
+        current_frame = game_state["frame"]
+
         if game_state["time"] == 0:
-            self.delay = 0
-            self.asteroids_shot = []
-            self.rest_counter = 0
-            self.prev_best_ast = None
-            
-        #1 bullet every 3 frames
-        # current frame, turning and shooting at the same time,  bullet goes where u were looking
-        
-        """
-        Method processed each time step by this controller to determine what control actions to take
-
-        Arguments:
-            ship_state (dict): contains state information for your own ship
-            game_state (dict): contains state information for all objects in the game
-
-        Returns:
-            float: thrust control value
-            float: turn-rate control value
-            bool: fire control value. Shoots if true
-            bool: mine deployment control value. Lays mine if true
-        """
-        if not hasattr(self, "last_logged_target_pos"):
+            self.delay                  = 0
+            self.asteroids_shot         = []
+            self.rest_counter           = 0
+            self.prev_best_ast          = None
             self.last_logged_target_pos = None
 
-        #pixels per frame
-        #bullet speed frames aka how many pixels the bullet move in one frame
-        bsf  = 800/30
-        heading = ship_state['heading'] # angle between 0-360 your ship is facing.
-        fire = False
+        ship_pos  = ship_state['position']
+        heading   = ship_state['heading']
+        fire      = False
         drop_mine = False
-        
-        best_ast = None
-        highest_prio = -1*math.inf
-        asteroids_already_shot = False
-        
+
+        best_ast            = None
+        highest_prio        = -math.inf
         found_prev_best_ast = False
-        #print("asteroids in the game", len(game_state['asteroids']))
-        #picking the closest asteroid
-        '''
-        filtering out asteroids that have been shot aka we need not shot ones
-        '''
+
+        # Prune expired shot records
+        self.asteroids_shot = [
+            a for a in self.asteroids_shot
+            if a["sim_frame"] > current_frame
+        ]
+
+        # ── Score every un-shot asteroid ──────────────────────────────────────
         for asteroid in game_state['asteroids']:
-            asteroids_already_shot = False
-            for shot_ast in self.asteroids_shot:
-                    if shot_ast["velocity"] == asteroid["velocity"] and shot_ast["size"] == asteroid["size"] : #identifer - [velocity, size]
-                        asteroids_already_shot = True
-                        break
-            if asteroids_already_shot == True:
+
+            already_shot = any(
+                s["velocity"] == asteroid["velocity"] and s["size"] == asteroid["size"]
+                for s in self.asteroids_shot
+            )
+            if already_shot:
                 continue
-            
-            asteroid_size = asteroid['size']
-            impact_time_interval= predict_collision(ship_state['position'], (0,0), 20, asteroid['position'], asteroid['velocity'], asteroid['radius'])
-            
-            # 0 start time of collision, 1 end time of collision - impact_time_interval 
-            turn_time = 0
-            impact_time = 0
-            #nan not impact
-            #inf in impact
-            #- means /// - + in collision   -- past coliision ++ future collision**
-            
-            if math.isinf(impact_time_interval[0]):
-                impact_time = 0
-            elif math.isnan(impact_time_interval[0]):
-                impact_time = 300 #changed from math.inf to 300 because of lookup table keys
-            else:
-                if impact_time_interval[0] <= 0 and impact_time_interval[1] >= 0:
-                    impact_time = 0
-                elif impact_time_interval[0] <= 0 and impact_time_interval[1] <= 0:
-                    impact_time = 300  #changed from math.inf to 300
-                elif impact_time_interval[0] >= 0 and impact_time_interval[1] >= 0:
-                    impact_time = impact_time_interval[0]*30
-                    #impact is getting rounded later
-                else:
-                    #print("impact_time_interval", impact_time_interval)
-                    raise ValueError("impact time is not being calculated correctly")
-                    
-                        
-         
-            distance = math.sqrt((asteroid['position'][0] - ship_state['position'][0])**2 + (asteroid['position'][1] - ship_state['position'][1])**2)   
-            time_bullet = distance/bsf + 1 #frames
-            future_ast_x = asteroid["position"][0] + time_bullet*(asteroid["velocity"][0]/30)
-            future_ast_y = asteroid["position"][1] + time_bullet*(asteroid["velocity"][1]/30)
-            desired_angle = math.degrees(math.atan2(future_ast_y - ship_state['position'][1], future_ast_x - ship_state['position'][0]))
-           
-            turn_time = min(abs(desired_angle - heading),abs(360-abs(desired_angle - heading)))/6 #added abs for the y because it was getting an error for lookup table
-            #round down probably
-            turn_time = round(turn_time)
-            
-            '''
-            u can do a check here so that if the impact_time is eveer more than 300, we make it 300
-            
-            '''
-            #print("\nimpact_time_interval", impact_time_interval)
-            
-           #if isinstance(impact_time, int):
-            
-            #priority = get_priority(asteroid_size,impact_time, turn_time)
-            
-            priority = self.get_fuzzy_values(asteroid_size,round(impact_time), turn_time)
-            #rounding priority
-            priority = round(priority)
-           
-            
-            #asteroid_priority_list.append({"priority": priority, "asteroid": asteroid})
-            
-            prev_asteroids_pos = []#x,y
+
+            asteroid_size        = asteroid['size']
+            impact_time_interval = predict_collision(
+                ship_pos, (0, 0), 20,
+                asteroid['position'], asteroid['velocity'], asteroid['radius']
+            )
+            imp_time = impact_frames(impact_time_interval)
+
+            # Analytic intercept angle for turn_time estimate
+            aim_angle, tof, _, _ = aim_intercept(ship_pos, asteroid, self.bsf)
+            diff      = abs(angle_diff(aim_angle, heading))
+            turn_time = min(round(diff / 6.0), 29)
+
+            priority = round(self.get_fuzzy_values(
+                asteroid_size, round(imp_time), turn_time
+            ))
+
+            # Mine drop: asteroid about to hit us within 7 frames
+            if (not ship_state["is_respawning"]
+                    and ship_state["mines_remaining"] > 0
+                    and imp_time != 0.0
+                    and impact_time_interval[0] > 0
+                    and impact_time_interval[1] > 0
+                    and imp_time <= 7.0):
+                drop_mine = True
+
+            # Track whether this is the same asteroid as last frame
             if self.prev_best_ast is not None:
-                prev_asteroids_pos.append(self.prev_best_ast["position"][0] +self.prev_best_ast["velocity"][0]/30)
-                prev_asteroids_pos.append(self.prev_best_ast["position"][1] +self.prev_best_ast["velocity"][1]/30)
-                
-                if math.isclose(prev_asteroids_pos[0],asteroid["position"][0]) and math.isclose(prev_asteroids_pos[1],asteroid["position"][1]) and self.prev_best_ast["size"] == asteroid["size"] :
-                    prev_prio = self.prev_best_ast["priority"]
-                    self.prev_best_ast = dict(asteroid)
+                pa     = self.prev_best_ast
+                pred_x = pa["position"][0] + pa["velocity"][0] / 30.0
+                pred_y = pa["position"][1] + pa["velocity"][1] / 30.0
+                if (math.isclose(pred_x, asteroid["position"][0], abs_tol=1.0)
+                        and math.isclose(pred_y, asteroid["position"][1], abs_tol=1.0)
+                        and pa["size"] == asteroid["size"]):
+                    prev_prio                      = pa["priority"]
+                    self.prev_best_ast             = asteroid.dict
                     self.prev_best_ast["priority"] = prev_prio
-                    found_prev_best_ast = True
-                
-                    
-            
-            #mine logic // issue when live is 1 and mine is 1, need to drop mine earlier to save life
-            if impact_time_interval[0] > 0 and impact_time_interval[1] > 0 and ship_state["mines_remaining"] > 0 and impact_time !=0 and ship_state["is_respawning"] == False:
-                
-                '''
-                #mine do damage to the ship as well hence no point in dropping mine
-                if ship_state["lives_remaining"] == 1 and ship_state["mines_remaining"] >0:
-                    if impact_time_interval[0]*30 <= 90:
-                        drop_mine = True
-                '''
-                if impact_time_interval[0]*30 <= 7 :
-                    if (asteroid["velocity"] not in self.asteroids_shot ) :#or ship_state["lives_remaining"] > 1
-                        drop_mine = True
-                        
-                       
-                                    
+                    found_prev_best_ast            = True
+
             if best_ast is None or priority > highest_prio:
-                #if asteroids_already_shot == False:
-                print(dir(asteroid))
-                best_ast = dict(asteroid)
+                best_ast     = asteroid.dict
                 highest_prio = priority
-            #asteroids_already_shot = False
-            #print("best_ast", best_ast)
-            
-        
-        
+
+        # ── No asteroids remaining ────────────────────────────────────────────
         if best_ast is None:
-            
             if self.delay == 1:
                 fire = True
                 log_explanation("[Action] Fired a bullet (default behavior, no target)")
-                self.delay = 0  
-            else:
-                fire = False
-            self.asteroids_shot = [ast for ast in self.asteroids_shot if ast["sim_frame"] > game_state["sim_frame"]]
+                self.delay = 0
             return 0, 0, fire, False
-        
-        best_ast["priority"] = highest_prio
-        
-         #meaning it is the first
-        if not found_prev_best_ast:
-            if self.last_logged_target_pos != tuple(best_ast["position"]):
-                log_explanation(f"[Target] New asteroid selected at {tuple(round(x,1)for x in best_ast['position'])} with priority {highest_prio}")
-                self.last_logged_target_pos = tuple(best_ast["position"])
-            self.prev_best_ast = best_ast
 
+        best_ast["priority"] = highest_prio
+
+        # ── Target selection / logging ────────────────────────────────────────
+        if not found_prev_best_ast:
+            pos_key = tuple(best_ast["position"])
+            if self.last_logged_target_pos != pos_key:
+                log_explanation(
+                    f"[Target] New asteroid at "
+                    f"{tuple(round(x,1) for x in best_ast['position'])} "
+                    f"priority={highest_prio}"
+                )
+                self.last_logged_target_pos = pos_key
+            self.prev_best_ast = best_ast
         else:
             if abs(self.prev_best_ast["priority"] - best_ast["priority"]) <= 1:
                 best_ast = self.prev_best_ast
-                log_explanation(f"[Decision] Staying on target at ({round(best_ast['position'][0],1):.2f}, {round(best_ast['position'][1],1):.2f}) — priority change insignificant ({best_ast['priority']} vs {self.prev_best_ast['priority']})")
-
+                log_explanation(
+                    f"[Decision] Holding target at "
+                    f"({round(best_ast['position'][0],1):.2f}, "
+                    f"{round(best_ast['position'][1],1):.2f})"
+                )
             else:
-                if self.last_logged_target_pos != tuple(best_ast["position"]):
-                    log_explanation(f"[Target] Switching to new higher-priority asteroid at {tuple(round(x,1)for x in best_ast['position'])}")
-                    self.last_logged_target_pos = tuple(best_ast["position"])
+                pos_key = tuple(best_ast["position"])
+                if self.last_logged_target_pos != pos_key:
+                    log_explanation(
+                        f"[Target] Switching → priority={highest_prio} at "
+                        f"{tuple(round(x,1) for x in best_ast['position'])}"
+                    )
+                    self.last_logged_target_pos = pos_key
                 self.prev_best_ast = best_ast
 
-        
-        a_distance = math.sqrt((best_ast['position'][0] - ship_state['position'][0])**2 + (best_ast['position'][1] - ship_state['position'][1])**2)
-  
-        #predicting the position of the asteroid in the future
-         
-        time_bullet = a_distance/bsf + 1 #frames
-        #time_bullet  = 0
-        future_ast_x = best_ast["position"][0] + time_bullet*(best_ast["velocity"][0]/30)
-        future_ast_y = best_ast["position"][1] + time_bullet*(best_ast["velocity"][1]/30)
-        
-        #delaying so that you wait for the ship to finish turning before firing
-        if self.delay == 1:
-            self.rest_counter = game_state["sim_frame"]
-            
-            fire = True
-            self.delay = 0
-              
-         #finding the desired angle to shoot for the closest asteroid
-        desired_angle = math.degrees(math.atan2(future_ast_y - ship_state['position'][1], future_ast_x - ship_state['position'][0]))
-   
-        #converting the angle to the range 0-360      
-        if desired_angle < 0 :
-            desired_angle  = 360 + desired_angle
-     
-        
-        
-        turn_direction = 0
-        if heading < desired_angle :
-            if desired_angle - heading < 180:
-                turn_direction = 1
-            else:
-                turn_direction = -1
-        else:
-            if heading - desired_angle < 180:
-                turn_direction = -1
-            else:
-                turn_direction = 1
-                
-        #turning towards the desired angle // finding which direction to turn
-        
-        #telling it to keep turning
-        if abs(desired_angle - heading) > 6: #180/30 num of degrees u can turn per frame.
-            turn_rate = turn_direction*180   # 180 degrees per second aka fastest u can turn.
-        #turn rate- degrees per second
-           
-        #telling it to turn slowly or stop turning
-        else:
-            turn_rate = turn_direction* 30* abs(desired_angle-heading)  
-            if game_state["sim_frame"] - self.rest_counter >=2:
-                
-            
-                self.delay = 1  
-                if best_ast is not None:
-                    best_ast["sim_frame"] = game_state["sim_frame"] + time_bullet
-                    
-                    self.asteroids_shot.append(best_ast)
- 
-        thrust = 0
-        self.asteroids_shot = [ast for ast in self.asteroids_shot if ast["sim_frame"] > game_state["sim_frame"]]
-                
-        
-        if ship_state["is_respawning"] :
-            fire = False
-        
-        
-        if fire:
-            log_explanation(f"[Action] Firing at asteroid at predicted position ({round(future_ast_x,1):.1f}, {round(future_ast_y,1):.1f})")
-        else:
-            log_explanation("[Decision] Holding fire — no valid target or wrong angle")
-        if drop_mine:
-            log_explanation(f"[Action] Dropping mine for asteroid at {tuple(round(x,1)for x in best_ast['position'])}")
-        return thrust, turn_rate, fire, drop_mine
+        # ── Analytic intercept for the chosen target ──────────────────────────
+        aim_angle, tof, ix, iy = aim_intercept(ship_pos, best_ast, self.bsf)
 
-    
+        # aim_angle is raw atan2 in (-180, 180] — pass directly to angle_diff.
+        # Do NOT apply % 360 here; that is the bug that broke near-0° targets.
+        diff     = angle_diff(aim_angle, heading)   # signed, in [-180, 180]
+        abs_diff = abs(diff)
+
+        # ── Turn rate ─────────────────────────────────────────────────────────
+        if abs_diff > 6.0:
+            turn_rate = math.copysign(180.0, diff)
+        else:
+            # Proportional slow-down as we close in on the target angle
+            turn_rate = 30.0 * diff
+
+            # Aligned — arm fire delay
+            if current_frame - self.rest_counter >= 2:
+                self.delay = 1
+                if best_ast is not None:
+                    record              = dict(best_ast)
+                    record["sim_frame"] = current_frame + int(tof) + 5
+                    self.asteroids_shot.append(record)
+
+        # ── Fire ──────────────────────────────────────────────────────────────
+        if self.delay == 1:
+            self.rest_counter = current_frame
+            fire       = True
+            self.delay = 0
+
+        # Suppress fire while respawn-invulnerable
+        if ship_state["is_respawning"]:
+            fire = False
+
+        # ── Logging ──────────────────────────────────────────────────────────
+        if fire:
+            log_explanation(
+                f"[Action] Firing → intercept ({round(ix,1):.1f}, {round(iy,1):.1f}) "
+                f"tof={tof:.1f}f err={abs_diff:.2f}°"
+            )
+        else:
+            log_explanation(
+                f"[Decision] Turning, err={abs_diff:.1f}° "
+                f"aim={aim_angle:.1f}° heading={heading:.1f}°"
+            )
+
+        if drop_mine:
+            log_explanation(
+                f"[Action] Dropping mine, asteroid at "
+                f"{tuple(round(x,1) for x in best_ast['position'])}"
+            )
+
+        return 0, turn_rate, fire, drop_mine
 
     @property
     def name(self) -> str:
-        """
-        Simple property used for naming controllers such that it can be displayed in the graphics engine
+        return "hitormiss v1.0"
 
-        Returns:
-            str: name of this controller
-        """
-        return "hitormiss v0.0"
-    
     @property
-    def custom_sprite_path(self)->str:
+    def custom_sprite_path(self) -> str:
         return "akila's turtle fortress spaceship sprite.png"
-    
-#change best_ast to self.best_ast
-
-
