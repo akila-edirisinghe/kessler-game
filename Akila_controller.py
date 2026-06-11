@@ -68,6 +68,7 @@ from typing import Dict, Tuple, Optional
 from impact_time_cal import predict_collision, solve_quadratic
 import math
 import json
+import time
 
 
 BULLET_SPEED     = 800.0
@@ -116,6 +117,44 @@ SPRAY_EVERY_N     = 3                       # fire 1-in-3 frames while turning
 MINE_SAVE_FRAMES      = 10
 MINE_COOLDOWN_FRAMES  = 90
 
+
+# ── Debug / Explanation Logging ─────────────────────────────────────────────
+import time
+
+ENABLE_LOGGING = True
+PRINT_TO_CONSOLE = True
+
+_last_log_time = 0.0
+LOG_INTERVAL = 0.25
+
+LOG_FILE = "akila_explanations.txt"
+
+# Overwrite file every time controller starts
+with open(LOG_FILE, "w", encoding="utf-8") as f:
+    f.write("=== Akila Decision Log ===\n\n")
+
+
+def log_explanation(message: str):
+    global _last_log_time
+
+    if ENABLE_LOGGING:
+        
+    
+
+        current_time = time.time()
+
+        if current_time - _last_log_time < LOG_INTERVAL:
+            return
+
+        _last_log_time = current_time
+
+        if PRINT_TO_CONSOLE:
+            print(message)
+
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(message + "\n")
+    else:
+        return
 
 
 def angle_diff(target: float, current: float) -> float:
@@ -276,7 +315,9 @@ class AkilaController(KesslerController):
          wrong-target asteroids become eligible for targeting again.
     """
 
-    def __init__(self):
+    def __init__(self, debug=True):
+        global ENABLE_LOGGING
+        ENABLE_LOGGING = debug
         with open('priorty_lookup_table.json', 'r') as f:
             self.lookup_table: dict = json.load(f)
         self.tracker = AsteroidTracker()
@@ -285,6 +326,7 @@ class AkilaController(KesslerController):
 
     def _reset(self):
         self.tracker.reset()
+        self.last_logged_mine_frame = -9999
 
         self.delay            = 0       # 0=idle  1=armed (fires next frame)
         self.rest_counter     = 0
@@ -302,6 +344,10 @@ class AkilaController(KesslerController):
 
         # Indecision breaker: frames elapsed since the last bullet was fired
         self.frames_since_fire: int = 0
+
+        # Judge-demo logging state
+        self.last_log_state = None
+        self.last_logged_target = None
 
     # ── Fuzzy lookup ──────────────────────────────────────────────────────────
 
@@ -336,6 +382,8 @@ class AkilaController(KesslerController):
             imp_t = impact_frames(interval)
             if 0 < imp_t <= MINE_SAVE_FRAMES:
                 if lives > 1 or ast["size"] >= 2:
+                    log_explanation("[Action] Deploying a mine as an emergency defensive measure against an imminent collision.")
+
                     return True
 
         return False
@@ -362,8 +410,11 @@ class AkilaController(KesslerController):
             alive = any(id_map.get(e[1]) == self.locked_id for e in scored)
             if not alive:
                 # Destroyed — unlock immediately
-                self.locked_id        = None
-                self.lock_frames_left = 0
+                if self.last_log_state != "target_destroyed":
+                    log_explanation("[Decision] Current target has been eliminated. Searching for the next highest-priority threat.")
+                    self.last_log_state = "target_destroyed"
+                    self.locked_id        = None
+                    self.lock_frames_left = 0
 
         # ── Active lock ───────────────────────────────────────────────────────
         if self.locked_id is not None and self.lock_frames_left > 0:
@@ -383,6 +434,11 @@ class AkilaController(KesslerController):
 
         # ── No active lock — pick best and start new lock ─────────────────────
         best = scored[0]
+        new_target = id_map.get(best[1])
+        if new_target != self.last_logged_target:
+            log_explanation("[Target] Focusing the asteroid that currently represents the highest-priority threat.")
+            self.last_logged_target = new_target
+            self.last_log_state = "target_selected"
         self._lock_onto(best, id_map)
         return best
 
@@ -423,11 +479,14 @@ class AkilaController(KesslerController):
         # for targeting again, without per-asteroid hit verification.
         if frame % RESCAN_INTERVAL == 0:
             self.shots_in_air.clear()
+            # Recovery log removed for judge demo
 
         # Mine decision
         drop_mine = self._decide_mine(ship_state, game_state, frame)
         if drop_mine:
-            self.last_mine_frame = frame
+           
+            print("[Action] Deploying a mine as an emergency defensive measure against an imminent collision.")
+               
 
         # ── Score all asteroids ───────────────────────────────────────────────
         scored = []
@@ -471,6 +530,8 @@ class AkilaController(KesslerController):
             self.locked_id        = id_map.get(chosen[1])
             self.lock_frames_left = FORCE_LOCK_FRAMES
             self.locked_score     = math.inf  # nothing can out-prioritize this lock
+            log_explanation("[Decision] No firing opportunity has appeared recently. Prioritizing the asteroid requiring the least rotation to secure a shot.")
+            self.last_log_state = "indecision"
             self.delay            = 0
             self.stored_aim       = None
         else:
@@ -527,6 +588,9 @@ class AkilaController(KesslerController):
                     advance_frames=1
                 )
                 self.stored_aim = (aim_h1, tof1, ix1, iy1)
+                if self.last_log_state != "aiming":
+                    log_explanation("[Decision] Holding fire while refining aim toward the selected target.")
+                    self.last_log_state = "aiming"
                 self.delay = 1
 
         # ── Fire ──────────────────────────────────────────────────────────────
@@ -543,6 +607,9 @@ class AkilaController(KesslerController):
             chosen_stable_id = id_map.get(chosen_idx)
             if chosen_stable_id is not None:
                 self.shots_in_air[chosen_stable_id] = frame + int(tof) + 5
+                if self.last_log_state != "firing":
+                    log_explanation("[Action] Firing because the ship is aligned with the predicted interception path.")
+                    self.last_log_state = "firing"
 
         # Track how long it's been since we last actually fired, used by the
         # indecision breaker at the top of the next call.
