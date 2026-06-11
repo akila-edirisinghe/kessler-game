@@ -5,11 +5,11 @@
 
 import time, random
 from src.kesslergame import Scenario, KesslerGame, GraphicsType
-from main_controller_akila import AkilaController
+from old_akila import AkilaController
 from graphics_both import GraphicsBoth
 from xfc_2023_replica_scenarios import *
 from test_controller import TestController
-from aimbot_controller import AimbotController
+from Akila_controller import AkilaController
 import sys 
 
 xfc2023 = [ex_adv_four_corners_pt0,ex_adv_four_corners_pt1, ex_adv_four_corners_pt2, ex_adv_asteroids_down_up_pt1, ex_adv_asteroids_down_up_pt2,
@@ -65,7 +65,7 @@ my_test_scenario = Scenario(name='Test Scenario',
 # Define Game Settings
 game_settings = {'perf_tracker': True,
                  'graphics_type': GraphicsType.Tkinter,
-                 'realtime_multiplier': 10,
+                 'realtime_multiplier':25,
                  'graphics_obj': None,
                  'frequency': 1000}
 
@@ -74,7 +74,7 @@ game = KesslerGame(settings=game_settings)  # Use this to visualize the game sce
 
 # Evaluate the game
 pre = time.perf_counter()
-score, perf_data = game.run(scenario=xfc2023[int(sys.argv[1])], controllers=[AkilaController(), AimbotController()])
+score, perf_data = game.run(scenario=xfc2023[int(sys.argv[1])], controllers=[AkilaController(), AkilaController()])
 
 # Print out some general info about the result
 print('Scenario eval time: '+str(time.perf_counter()-pre))
@@ -83,3 +83,4 @@ print('Asteroids hit: ' + str([team.asteroids_hit for team in score.teams]))
 print('Deaths: ' + str([team.deaths for team in score.teams]))
 print('Accuracy: ' + str([team.accuracy for team in score.teams]))
 print('Mean eval time: ' + str([team.mean_eval_time for team in score.teams]))
+
